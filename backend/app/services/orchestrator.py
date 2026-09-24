@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -39,7 +40,7 @@ from app.domain.quiet_hours import next_quiet_end, offers_allowed
 from app.domain.ranking import RankedCandidate, rank_candidates
 from app.domain.state_machine import SideEffect, State, StateMachineEvent, transition
 from app.integrations.workforce.mock import MockWorkforceAdapter
-from app.observability.redaction import redact_if_health
+from app.observability.redaction import mask_phone, redact_if_health
 from app.ports import Channel, Scheduler
 
 WAVE_SIZE = 3
@@ -406,9 +407,6 @@ class RescueOrchestrator:
         )
 
     async def _handle_confirmation(self, conversation_id: str, employee_id: str) -> None:
-        import os
-        if os.getenv("ORCH_DEBUG"):
-            print("DEBUG confirmation entered")
         now = self._clock.now()
         async with self._sessions() as session:
             case = (
@@ -422,13 +420,9 @@ class RescueOrchestrator:
                 )
             ).scalars().first()
             if case is None:
-                if os.getenv("ORCH_DEBUG"):
-                    print("DEBUG confirmation: no OPEN case found")
                 await self._send_out_of_scope(conversation_id, employee_id)
                 return
 
-            if os.getenv("ORCH_DEBUG"):
-                print("DEBUG confirmation: case found", case.id)
 
             result = transition(State.OPEN, StateMachineEvent.CANDIDATES_COMPUTED)
             case.status = result.new_state.value
@@ -461,8 +455,6 @@ class RescueOrchestrator:
                 location_tz=location_tz,
                 now=now,
             )
-            if os.getenv("ORCH_DEBUG"):
-                print("DEBUG confirmation: wave sent count", offered_count)
 
             if offered_count == 0:
                 # No eligible candidates at all: escalate — unless the wave was
@@ -1578,12 +1570,24 @@ class RescueOrchestrator:
         **params: Any,
     ) -> None:
         body = render(template_key, **params)
-        provider_id = await self._channel.send(
-            recipient_phone_e164=to,
-            body=body,
-            template_key=template_key,
-            rescue_id=rescue_id,
-        )
+        try:
+            provider_id = await self._channel.send(
+                recipient_phone_e164=to,
+                body=body,
+                template_key=template_key,
+                rescue_id=rescue_id,
+            )
+        except Exception as error:
+            # Delivery failures are surfaced (Ops screen / alerting) but must
+            # never crash the inbound path (§9.2, §9.3).
+            structlog.get_logger(__name__).warning(
+                "outbound_delivery_failed",
+                template_key=template_key,
+                recipient=mask_phone(to),
+                rescue_id=rescue_id,
+                error=str(error)[:200],
+            )
+            return
         if conversation_id is None:
             return
         async with self._sessions() as session:

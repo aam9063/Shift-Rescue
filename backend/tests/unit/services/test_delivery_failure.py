@@ -94,3 +94,32 @@ async def test_all_waves_blocked_by_failures_still_escalate() -> None:
 
         case = (await session.execute(select(RescueCase))).scalar_one()
         assert case.status == "OFFERING"
+
+
+async def test_undeliverable_template_does_not_raise_from_the_webhook_path() -> None:
+    """A provider rejection on a template send must not 500 the inbound path
+    (Twilio would retry forever and the employee would get nothing)."""
+    world, _ = await build_world(floor_count=4)
+    world.orchestrator._channel = FlakyChannel(fail_for="+34600000001")
+
+    handled = await world.orchestrator.handle_inbound(
+        conversation_id="conv_1",
+        employee_id="emp_01_floor",
+        provider_message_id="p1",
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    assert handled is None  # no exception
+
+    from sqlalchemy import func, select
+
+    from app.db.models import Message
+
+    async with world.session_factory() as session:
+        inbound = (
+            await session.execute(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.direction == "inbound")
+            )
+        ).scalar_one()
+        assert inbound == 1  # the message was still recorded
