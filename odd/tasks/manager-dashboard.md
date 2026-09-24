@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **slices 1-2 closed; slice 3 in progress** (Today + Rescue detail closed; Approvals in progress)
+Status: **slices 1-3 closed** (Today + Rescue detail + Approvals); UI redesign review pending from user
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -92,7 +92,15 @@ agent only asks before pushing.
 
 Final verification slice 2: `pnpm vitest run` 55/55; `pnpm build` clean; `pnpm lint` clean.
 
-Next: slice 3 (Approvals screen) in progress; after that the user reviews the UI and requests visual changes.
+## Commits (slice 3)
+
+- `61e1e1e` feat(frontend): approval domain types and pure helpers (TDD)
+- `c0d15dd` feat(frontend): mock pending approvals with in-memory decide mutation
+- `382c7c2` feat(frontend): Approvals screen with approve/reject decisions and shell header navigation (TDD)
+
+Final verification slice 3: `pnpm vitest run` 68/68; `pnpm build` clean; `pnpm lint` clean.
+
+Next: user reviews the UI and requests definitive visual changes; redesign expected. Feature doc to be updated with the redesign scope when it arrives.
 
 ## Slice 3 — Approvals screen (in progress)
 
@@ -113,13 +121,13 @@ Approvals); a router still deferred.
 
 ### Acceptance criteria (slice 3)
 
-- [ ] AC11: Approvals screen lists pending approvals oldest-first with kind
+- [x] AC11: Approvals screen lists pending approvals oldest-first with kind
       labels, context and approve/reject actions.
-- [ ] AC12: Deciding an approval updates its status, removes it from the
+- [x] AC12: Deciding an approval updates its status, removes it from the
       inbox and invalidates shared queries (rescue detail reflects it).
-- [ ] AC13: Empty state renders when no approvals are pending.
-- [ ] AC14: Shell header navigates Today <-> Approvals without a router.
-- [ ] AC15: All tests green, build and lint clean; commits recorded.
+- [x] AC13: Empty state renders when no approvals are pending.
+- [x] AC14: Shell header navigates Today <-> Approvals without a router.
+- [x] AC15: All tests green, build and lint clean; commits recorded.
 
 ## Slice 2 — Rescue detail screen (in progress)
 
