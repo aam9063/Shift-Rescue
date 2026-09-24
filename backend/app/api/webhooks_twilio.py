@@ -17,6 +17,25 @@ from app.core.config import get_settings
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio"])
 
 
+def public_url(request: Request) -> str:
+    """Reconstruct the URL Twilio signed.
+
+    TLS terminates at the tunnel/reverse proxy (Cloudflare, ngrok, Caddy), so
+    the request reaches uvicorn as http://<internal-host>; Twilio signs the
+    public https URL. Forwarded headers restore it.
+    """
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    )
+    url = f"{proto}://{host}{request.url.path}"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    return url
+
+
 class TwilioInboundService:
     """Maps provider messages to the domain; unknown senders are ignored."""
 
@@ -108,7 +127,7 @@ async def twilio_inbound(
 
     if settings.twilio_validate_signature and not validate_twilio_signature(
         settings.twilio_auth_token,
-        str(request.url),
+        public_url(request),
         params,
         request.headers.get("X-Twilio-Signature"),
     ):
@@ -135,7 +154,7 @@ async def twilio_status(
 
     if settings.twilio_validate_signature and not validate_twilio_signature(
         settings.twilio_auth_token,
-        str(request.url),
+        public_url(request),
         params,
         request.headers.get("X-Twilio-Signature"),
     ):

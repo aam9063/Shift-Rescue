@@ -97,6 +97,25 @@ def test_inbound_without_signature_is_rejected(client) -> None:
     assert response.status_code == 403
 
 
+def test_inbound_behind_a_tls_proxy_uses_the_forwarded_public_url(client) -> None:
+    """Cloudflare/ngrok terminate TLS: Twilio signs the https URL, so the
+    signature must be validated against the forwarded public URL."""
+    params = {"Body": "hola", "From": "whatsapp:+34600000001", "MessageSid": "SM999"}
+    public_url = "https://masters-clarity-possible-shipped.trycloudflare.com/webhooks/twilio/inbound"
+    response = client.post(
+        "/webhooks/twilio/inbound",
+        data=params,
+        headers={
+            "X-Twilio-Signature": sign(public_url, params),
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "masters-clarity-possible-shipped.trycloudflare.com",
+            "Host": "masters-clarity-possible-shipped.trycloudflare.com",
+        },
+    )
+    assert response.status_code == 204
+    assert client.fake_service.inbound == [("+34600000001", "SM999", "hola")]
+
+
 def test_status_callback_updates_delivery(client) -> None:
     params = {"MessageSid": "SM111", "MessageStatus": "delivered"}
     response = client.post(
