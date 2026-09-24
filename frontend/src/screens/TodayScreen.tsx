@@ -67,9 +67,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export interface TodayScreenProps {
   /** Injected clock for deterministic tests; defaults to now. */
   now?: Date
+  /** Called with the rescue id when the user opens a rescue from its banner. */
+  onOpenRescue?: (rescueId: string) => void
 }
 
-export function TodayScreen({ now = new Date() }: TodayScreenProps) {
+export function TodayScreen({ now = new Date(), onOpenRescue }: TodayScreenProps) {
   const dayIso = now.toISOString().slice(0, 10)
   const { shifts, isLoading } = useTodayShifts(dayIso)
   const { rescues } = useActiveRescues()
@@ -79,15 +81,26 @@ export function TodayScreen({ now = new Date() }: TodayScreenProps) {
       <h1 className="text-2xl font-semibold leading-9 tracking-tight text-green-starbucks">
         Today
       </h1>
+      {rescues && rescues.length > 0 && (
+        <div>
+          {rescues.map((rescue) => (
+            <button
+              key={rescue.id}
+              type="button"
+              onClick={() => onOpenRescue?.(rescue.id)}
+              className="mb-6 block w-full cursor-pointer rounded-card text-left transition-opacity hover:opacity-90"
+            >
+              <ActiveRescueBanner rescue={rescue} now={now} />
+            </button>
+          ))}
+        </div>
+      )}
       {isLoading ? (
         <p className="text-base text-text-secondary">Loading…</p>
       ) : !shifts || shifts.length === 0 ? (
         <p className="text-base text-text-secondary">No shifts scheduled for today</p>
       ) : (
         <>
-          {rescues?.map((rescue) => (
-            <ActiveRescueBanner key={rescue.id} rescue={rescue} now={now} />
-          ))}
           {groupShiftsByRole(shifts, RoleOrder).map((group) => (
             <Section key={group.role} title={roleLabels[group.role]}>
               {group.shifts.map((shift) => (

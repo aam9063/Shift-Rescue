@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { RescueCase, Shift } from '../domain/types'
+import type { RescueCase, RescueDetail, Shift } from '../domain/types'
 import { MockDashboardDataSource, type DashboardDataSource } from './mock'
 
 /**
@@ -22,4 +22,12 @@ export function useActiveRescues(): { rescues: RescueCase[] | undefined; isLoadi
     queryFn: () => dataSource.getActiveRescues(),
   })
   return { rescues: query.data, isLoading: query.isLoading }
+}
+
+export function useRescueDetail(rescueId: string): { detail: RescueDetail | undefined; isLoading: boolean } {
+  const query = useQuery({
+    queryKey: ['rescues', rescueId],
+    queryFn: () => dataSource.getRescueDetail(rescueId),
+  })
+  return { detail: query.data, isLoading: query.isLoading }
 }
