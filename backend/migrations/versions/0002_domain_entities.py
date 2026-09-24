@@ -18,7 +18,12 @@ depends_on: Sequence[str] | None = None
 
 
 def _timestamp_column() -> sa.Column:
-    return sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
+    return sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    )
 
 
 def upgrade() -> None:
@@ -167,7 +172,12 @@ def upgrade() -> None:
         sa.Column("location_id", sa.String(36), primary_key=True),
         sa.Column("wave_size", sa.Integer(), nullable=False, server_default="3"),
         sa.Column("wave_interval_minutes", sa.Integer(), nullable=False, server_default="10"),
-        sa.Column("rescue_deadline_minutes_before_start", sa.Integer(), nullable=False, server_default="30"),
+        sa.Column(
+            "rescue_deadline_minutes_before_start",
+            sa.Integer(),
+            nullable=False,
+            server_default="30",
+        ),
         sa.Column("min_rest_hours", sa.Integer(), nullable=False, server_default="12"),
         sa.Column("max_coverages_per_14_days", sa.Integer(), nullable=False, server_default="4"),
         sa.Column("quiet_hours_start", sa.String(5), nullable=False, server_default="23:00"),

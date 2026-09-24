@@ -40,7 +40,7 @@ EXPECTED_TABLES = {
 
 
 def test_all_spec_entities_are_modeled() -> None:
-    assert EXPECTED_TABLES <= set(Base.metadata.tables.keys())
+    assert set(Base.metadata.tables.keys()) >= EXPECTED_TABLES
 
 
 async def test_employee_shift_rescue_offer_roundtrip() -> None:

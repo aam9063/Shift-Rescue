@@ -79,7 +79,8 @@ class Shift(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     employee_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    status: Mapped[str] = mapped_column(String(20), default="scheduled")  # scheduled|absent|open|covered
+    # scheduled | absent | open | covered
+    status: Mapped[str] = mapped_column(String(20), default="scheduled")
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -110,7 +111,6 @@ class RescueCase(Base):
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    # covered | partially_covered | escalated_unresolved | cancelled
     covering_employee_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = _created_at()
@@ -124,7 +124,8 @@ class Offer(Base):
     employee_id: Mapped[str] = mapped_column(String(36), index=True)
     wave_number: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
-    # PENDING|ACCEPTED|DECLINED|COUNTER_PROPOSED|EXPIRED|CANCELLED|SUPERSEDED|WITHDRAWN
+    # PENDING | ACCEPTED | DECLINED | COUNTER_PROPOSED | EXPIRED
+    # CANCELLED | SUPERSEDED | WITHDRAWN
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -184,8 +185,10 @@ class ApprovalRequest(Base):
     id: Mapped[str] = _pk()
     rescue_id: Mapped[str] = mapped_column(String(36), index=True)
     offer_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    kind: Mapped[str] = mapped_column(String(30))  # overtime|partial_coverage|schedule_change|cancel_rescue
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|approved|rejected|expired
+    # overtime | partial_coverage | schedule_change | cancel_rescue
+    kind: Mapped[str] = mapped_column(String(30))
+    # pending | approved | rejected | expired
+    status: Mapped[str] = mapped_column(String(20), default="pending")
     decided_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _created_at()
@@ -198,7 +201,8 @@ class AuditEvent(Base):
     rescue_id: Mapped[str] = mapped_column(String(36), index=True)
     type: Mapped[str] = mapped_column(String(40))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
-    actor: Mapped[str] = mapped_column(String(60), default="system")  # system|llm|employee:<id>|manager:<id>
+    # system | llm | employee:<id> | manager:<id>
+    actor: Mapped[str] = mapped_column(String(60), default="system")
     created_at: Mapped[datetime] = _created_at()
 
 
