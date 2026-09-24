@@ -107,3 +107,31 @@ export function buildTodayColumns(
     covered: shifts.filter((s) => s.status === 'covered'),
   }
 }
+
+export interface CountdownParts {
+  text: string
+  caption: string
+}
+
+/**
+ * Adaptive countdown for rescue deadlines: the rescue window lives in
+ * minutes (spec 5.3: deadline = shift start - 30 min), but when viewing a
+ * deadline hours or days away, MM:SS is unreadable. Units scale with the
+ * remaining time; only the final hour ticks seconds.
+ */
+export function formatCountdownParts(isoDeadline: string, now: Date): CountdownParts {
+  const msLeft = new Date(isoDeadline).getTime() - now.getTime()
+  const totalSeconds = Math.max(0, Math.floor(msLeft / 1000))
+  if (totalSeconds < 3600) {
+    return { text: formatCountdown(isoDeadline, now), caption: 'minutes left' }
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  if (totalMinutes < 48 * 60) {
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    return { text: `${hours}h ${String(minutes).padStart(2, '0')}m`, caption: 'hours left' }
+  }
+  const hours = Math.floor(totalMinutes / 60)
+  const days = Math.floor(hours / 24)
+  return { text: `${days}d ${hours % 24}h`, caption: 'days left' }
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ApprovalRequest, RescueCase, Shift } from './types'
 import {
   buildTodayColumns,
+  formatCountdownParts,
   minutesUntil,
   formatShiftTime,
   formatCountdown,
@@ -147,5 +148,39 @@ describe('buildTodayColumns', () => {
     const columns = buildTodayColumns([scheduledShift], [], [])
     expect(columns.uncovered).toEqual([])
     expect(columns.covered).toEqual([])
+  })
+})
+
+describe('formatCountdownParts (adaptive units)', () => {
+  it('keeps MM:SS below one hour', () => {
+    const now = new Date('2026-10-03T06:45:48+02:00')
+    expect(formatCountdownParts('2026-10-03T06:50:00+02:00', now)).toEqual({
+      text: '04:12',
+      caption: 'minutes left',
+    })
+  })
+
+  it('switches to hours above one hour', () => {
+    const now = new Date('2026-10-03T06:45:48+02:00')
+    expect(formatCountdownParts('2026-10-03T10:15:00+02:00', now)).toEqual({
+      text: '3h 29m',
+      caption: 'hours left',
+    })
+  })
+
+  it('switches to days above 48 hours', () => {
+    const now = new Date('2026-10-03T06:45:48+02:00')
+    expect(formatCountdownParts('2026-10-05T12:45:48+02:00', now)).toEqual({
+      text: '2d 6h',
+      caption: 'days left',
+    })
+  })
+
+  it('clamps to zero once expired', () => {
+    const now = new Date('2026-10-03T07:51:00+02:00')
+    expect(formatCountdownParts('2026-10-03T07:50:00+02:00', now)).toEqual({
+      text: '00:00',
+      caption: 'minutes left',
+    })
   })
 })

@@ -4,7 +4,7 @@ import {
   sortEventsChronologically,
 } from '../domain/rescue'
 import type { AuditEvent, CandidateResult, Offer, OfferStatus, RescueDetail } from '../domain/types'
-import { formatCountdown, formatShiftTime } from '../domain/today'
+import { formatCountdownParts, formatShiftTime } from '../domain/today'
 import { useRescueDetail } from '../services/hooks'
 
 const TIMEZONE = 'Europe/Madrid'
@@ -56,7 +56,7 @@ function timeOf(iso: string): string {
 }
 
 function Hero({ detail, now, onBack }: { detail: RescueDetail; now: Date; onBack: () => void }) {
-  const countdown = formatCountdown(detail.rescue.deadlineAt, now)
+  const countdown = formatCountdownParts(detail.rescue.deadlineAt, now)
   const wave =
     detail.rescue.waveCurrent != null && detail.rescue.waveTotal != null
       ? ` · wave ${detail.rescue.waveCurrent} of ${detail.rescue.waveTotal}`
@@ -87,8 +87,8 @@ function Hero({ detail, now, onBack }: { detail: RescueDetail; now: Date; onBack
             </span>
           </div>
           <div className="text-right">
-            <p className="font-serif text-5xl font-bold tracking-tight md:text-6xl">{countdown}</p>
-            <p className="mt-1 text-sm tracking-tight text-white/70">minutes left</p>
+            <p className="font-serif text-5xl font-bold tracking-tight md:text-6xl">{countdown.text}</p>
+            <p className="mt-1 text-sm tracking-tight text-white/70">{countdown.caption}</p>
           </div>
         </div>
       </div>

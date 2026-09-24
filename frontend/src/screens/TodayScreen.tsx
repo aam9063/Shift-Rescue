@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { buildTodayColumns, formatCountdown, formatShiftTime } from '../domain/today'
+import { buildTodayColumns, formatCountdownParts, formatShiftTime } from '../domain/today'
 import {
   type ApprovalRequest,
   type OfferPreview,
@@ -108,7 +108,7 @@ function SeekingCard({
   now: Date
   onOpen?: () => void
 }) {
-  const countdown = formatCountdown(rescue.deadlineAt, now)
+  const countdown = formatCountdownParts(rescue.deadlineAt, now)
   const urgent = rescueCountdownUrgent(rescue.deadlineAt, now)
   return (
     <button type="button" onClick={onOpen} className="block w-full cursor-pointer text-left">
@@ -123,7 +123,7 @@ function SeekingCard({
             </p>
           </div>
           <p className={`mt-1 text-3xl font-bold tracking-tight ${urgent ? 'text-error' : 'text-text-primary'}`}>
-            {countdown}
+            {countdown.text}
           </p>
           <p className="mt-1 text-sm tracking-tight text-text-secondary">
             Absent: {rescue.absentEmployeeName}
@@ -163,6 +163,7 @@ function ApprovalCard({
   onReview?: () => void
 }) {
   const deadline = approvalExpiresAt(approval)
+  const countdown = deadline ? formatCountdownParts(deadline, now) : undefined
   return (
     <Card topAccent="border-t-4 border-gold">
       <div className="px-4 py-3">
@@ -175,7 +176,7 @@ function ApprovalCard({
           </p>
         </div>
         <p className="mt-1 text-3xl font-bold tracking-tight text-text-primary">
-          {deadline ? formatCountdown(deadline, now) : '--:--'}
+          {countdown ? countdown.text : '--:--'}
         </p>
         <p className="mt-1 text-sm tracking-tight text-text-secondary">
           {approval.context.employeeName}
