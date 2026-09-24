@@ -196,3 +196,53 @@ Then run a real rescue:
 3. Store `TWILIO_*` in SSM Parameter Store (never in the repo) and inject
    them into the EC2 containers (see the deployment ADR).
 4. Keep `TWILIO_VALIDATE_SIGNATURE=true` always.
+
+## Troubleshooting (real errors hit while wiring this up)
+
+### Inbound reaches the API but nothing happens
+Check the API logs and the DB:
+
+```bash
+docker compose -f infra/docker-compose.yml logs --since 10m api | grep -E "webhooks|TwilioChannelError|Traceback"
+docker compose -f infra/docker-compose.yml exec postgres   psql -U shift_rescue -c "SELECT id, direction, provider_message_id, template_key FROM message ORDER BY created_at DESC LIMIT 5;"
+```
+
+- **No employee for that phone** → the webhook ignores unknown senders. Run the
+  `DEMO_REAL_PHONES` mapping (step 6) and `make seed`.
+- **No shift today for that employee** → the agent answers "out of scope". The
+  seed starts the schedule on the day it runs, so re-run `make seed` on the
+  demo day.
+
+### `403 Forbidden` on `/webhooks/twilio/inbound`
+Signature validation failed. Two causes:
+1. `TWILIO_AUTH_TOKEN` does not match the account (verify with:
+   `curl -u "$SID:$TOKEN" https://api.twilio.com/2010-04-01/Accounts/$SID.json`).
+2. The app is behind a TLS proxy (cloudflared/ngrok/Caddy): Twilio signs the
+   public `https://…` URL. The app reconstructs it from
+   `X-Forwarded-Proto`/`X-Forwarded-Host` (see `app/api/webhooks_twilio.py`) and
+   uvicorn runs with `--proxy-headers`.
+
+### `21654 ContentSid Required` when sending
+The `From` number is not the sandbox the employee messaged, so Twilio sees **no
+open 24h session** and demands an approved template. An account can expose more
+than one sandbox (legacy page vs new console) — the authoritative source is the
+Twilio **message log**:
+
+```bash
+curl -s -u "$SID:$TOKEN" "https://api.twilio.com/2010-04-01/Accounts/$SID/Messages.json?PageSize=10" | python -c "import sys,json;[print(m['from'],'->',m['to'],m['status']) for m in json.load(sys.stdin)['messages']]"
+```
+
+Whatever number appears on the *inbound* line (`+34… -> whatsapp:<sandbox>`) is
+the one that goes in `TWILIO_WHATSAPP_FROM`.
+
+### Error `12300 Invalid Content-Type` on incoming messages
+Twilio requires a `Content-Type` on every webhook response; without it the
+Debugger reports a 502/12300. Our endpoints answer with empty TwiML
+(`application/xml`).
+
+### Trial account limits (expected, not bugs)
+- Only **joined** numbers receive messages (others fail with 63016/63015).
+- Business-initiated messages need approved templates; replies inside the 24h
+  window are free-form.
+- The sandbox session expires ~3 days after joining → rejoin with `join <code>`.
+- Messages are prefixed with "Sent from your Twilio trial account".
