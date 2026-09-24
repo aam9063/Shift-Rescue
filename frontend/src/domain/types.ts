@@ -26,6 +26,13 @@ export interface Shift {
 
 export type RescueStatus = 'OPEN' | 'OFFERING' | 'AWAITING_APPROVAL' | 'COVERED' | 'ESCALATED'
 
+export type OfferPreviewStatus = 'pending' | 'declined' | 'accepted'
+
+export interface OfferPreview {
+  employeeName: string
+  status: OfferPreviewStatus
+}
+
 export interface RescueCase {
   id: string
   shiftId: string
@@ -33,6 +40,11 @@ export interface RescueCase {
   absentEmployeeName: string
   status: RescueStatus
   deadlineAt: string
+  openedAt?: string
+  waveCurrent?: number
+  waveTotal?: number
+  /** Compact offer list for kanban cards; full detail comes from the detail query. */
+  offerPreviews?: OfferPreview[]
 }
 
 /* Rescue detail entities (spec §4.1: AuditEvent, Offer, Interpretation). */
@@ -57,6 +69,8 @@ export interface AuditEvent {
   type: AuditEventType
   actor: string
   createdAt: string
+  /** True when the inbound message was interpreted by the LLM (spec section 6.2). */
+  interpretedByAi?: boolean
 }
 
 export type OfferStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'COUNTER_PROPOSED' | 'EXPIRED' | 'CANCELLED' | 'SUPERSEDED' | 'WITHDRAWN'

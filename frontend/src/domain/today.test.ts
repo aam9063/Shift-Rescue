@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { RescueCase, Shift } from './types'
+import type { ApprovalRequest, RescueCase, Shift } from './types'
 import {
+  buildTodayColumns,
   minutesUntil,
   formatShiftTime,
   formatCountdown,
@@ -117,5 +118,34 @@ describe('formatCountdown', () => {
   it('clamps to 00:00 once the deadline has passed', () => {
     const now = new Date('2026-10-03T06:51:00+02:00')
     expect(formatCountdown('2026-10-03T06:50:00+02:00', now)).toBe('00:00')
+  })
+})
+
+describe('buildTodayColumns', () => {
+  const openShift: Shift = { id: 'shift_open', locationId: 'loc', role: 'kitchen', startsAt: '2026-10-03T15:00:00+02:00', endsAt: '2026-10-03T23:00:00+02:00', assigneeName: null, status: 'open' }
+  const absentShift: Shift = { id: 'shift_absent', locationId: 'loc', role: 'floor', startsAt: '2026-10-03T15:00:00+02:00', endsAt: '2026-10-03T23:00:00+02:00', assigneeName: 'Iker M.', status: 'absent' }
+  const coveredShift: Shift = { id: 'shift_covered', locationId: 'loc', role: 'bar', startsAt: '2026-10-03T07:00:00+02:00', endsAt: '2026-10-03T15:00:00+02:00', assigneeName: 'Marta L.', status: 'covered' }
+  const scheduledShift: Shift = { id: 'shift_sched', locationId: 'loc', role: 'supervisor', startsAt: '2026-10-03T11:00:00+02:00', endsAt: '2026-10-03T19:00:00+02:00', assigneeName: 'Javier P.', status: 'scheduled' }
+  const seeking: RescueCase = { id: 'r1', shiftId: 'shift_absent', absentEmployeeName: 'Iker M.', status: 'OFFERING', deadlineAt: '2026-10-03T15:00:00+02:00' }
+  const approval: ApprovalRequest = { id: 'a1', rescueId: 'r2', kind: 'partial_coverage', status: 'pending', requestedAt: '2026-10-03T06:43:00+02:00', context: { employeeName: 'Sonia P.', shiftTime: '19:00 – 23:00' } }
+
+  it('derives the four kanban columns from shifts, rescues and approvals', () => {
+    const columns = buildTodayColumns([openShift, absentShift, coveredShift, scheduledShift], [seeking], [approval])
+    expect(columns.uncovered.map((s) => s.id)).toEqual(['shift_open'])
+    expect(columns.seeking).toEqual([seeking])
+    expect(columns.needsApproval).toEqual([approval])
+    expect(columns.covered.map((s) => s.id)).toEqual(['shift_covered'])
+  })
+
+  it('excludes shifts with an active rescue from the uncovered column', () => {
+    const awaiting: RescueCase = { ...seeking, id: 'r2', shiftId: 'shift_open', status: 'AWAITING_APPROVAL' }
+    const columns = buildTodayColumns([openShift], [awaiting], [])
+    expect(columns.uncovered).toEqual([])
+  })
+
+  it('keeps scheduled shifts out of every column', () => {
+    const columns = buildTodayColumns([scheduledShift], [], [])
+    expect(columns.uncovered).toEqual([])
+    expect(columns.covered).toEqual([])
   })
 })

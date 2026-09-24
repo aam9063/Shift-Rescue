@@ -1,4 +1,4 @@
-import type { RescueCase, Shift, ShiftRole } from './types'
+import type { ApprovalRequest, RescueCase, Shift, ShiftRole } from './types'
 
 /**
  * Pure helpers for the Today screen. No React, no I/O, no `Date.now()` —
@@ -76,4 +76,34 @@ export function formatCountdown(isoDeadline: string, now: Date): string {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+export interface TodayColumns {
+  /** Open shifts with no active rescue yet. */
+  uncovered: Shift[]
+  /** Rescues actively offering to candidates. */
+  seeking: RescueCase[]
+  /** Pending manager approvals. */
+  needsApproval: ApprovalRequest[]
+  /** Shifts covered today. */
+  covered: Shift[]
+}
+
+const ACTIVE_RESCUE_STATUSES = new Set(['OFFERING', 'AWAITING_APPROVAL'])
+
+/** Derives the Today kanban columns (user mockup layout). Pure. */
+export function buildTodayColumns(
+  shifts: Shift[],
+  rescues: RescueCase[],
+  approvals: ApprovalRequest[],
+): TodayColumns {
+  const shiftsWithRescue = new Set(
+    rescues.filter((r) => ACTIVE_RESCUE_STATUSES.has(r.status)).map((r) => r.shiftId),
+  )
+  return {
+    uncovered: shifts.filter((s) => s.status === 'open' && !shiftsWithRescue.has(s.id)),
+    seeking: rescues.filter((r) => r.status === 'OFFERING'),
+    needsApproval: approvals.filter((a) => a.status === 'pending'),
+    covered: shifts.filter((s) => s.status === 'covered'),
+  }
 }
