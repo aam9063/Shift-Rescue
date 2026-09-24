@@ -25,6 +25,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "hypothesis>=6.168.1",
+    "pytest-cov>=7.1.0",
 ]
 
 [build-system]
@@ -40,6 +41,14 @@ asyncio_mode = "auto"
 markers = [
     "integration: requires a running PostgreSQL (skipped without DATABASE_URL)",
 ]
+
+[tool.coverage.run]
+source = ["app/domain"]
+
+[tool.coverage.report]
+# Spec Feature 1 DoD: domain coverage gate. Never relaxed (§0 rule 4).
+fail_under = 95
+show_missing = true
 
 [tool.ruff]
 line-length = 100
