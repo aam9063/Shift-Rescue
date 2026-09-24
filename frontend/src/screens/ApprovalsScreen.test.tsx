@@ -17,9 +17,9 @@ describe('ApprovalsScreen', () => {
     const items = screen.getAllByRole('listitem')
     const texts = items.map((li) => li.textContent ?? '')
     expect(texts.findIndex((t) => t.includes('Bruno T.')))
-      .toBeLessThan(texts.findIndex((t) => t.includes('Iván M.')))
+      .toBeLessThan(texts.findIndex((t) => t.includes('Sonia P.')))
     expect(screen.getByText(/exceed contracted 30h weekly hours/)).toBeInTheDocument()
-    expect(screen.getByText(/Proposed start 07:15/)).toBeInTheDocument()
+    expect(screen.getByText(/Can cover from 19:00 to 22:00/)).toBeInTheDocument()
   })
 
   it('removes an approval from the inbox after approving it', async () => {
@@ -29,14 +29,14 @@ describe('ApprovalsScreen', () => {
     const item = findItem('Bruno T.')
     await user.click(within(item!).getByRole('button', { name: 'Approve' }))
     expect(screen.queryByText(/Bruno T\./)).not.toBeInTheDocument()
-    expect(screen.getByText(/Iván M\./)).toBeInTheDocument()
+    expect(screen.getByText(/Sonia P\./)).toBeInTheDocument()
   })
 
   it('removes an approval from the inbox after rejecting it', async () => {
     const user = userEvent.setup()
     renderWithProviders(<ApprovalsScreen />)
-    await screen.findByText(/Iván M\./)
-    const item = findItem('Iván M.')
+    await screen.findByText(/Sonia P\./)
+    const item = findItem('Sonia P.')
     await user.click(within(item!).getByRole('button', { name: 'Reject' }))
     expect(await screen.findByText('No pending approvals')).toBeInTheDocument()
   })

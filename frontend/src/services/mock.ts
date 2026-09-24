@@ -69,6 +69,7 @@ const mockApprovals: ApprovalRequest[] = [
     kind: 'partial_coverage',
     status: 'pending',
     requestedAt: '2026-10-03T06:43:00+02:00',
+    expiresAt: '2026-10-03T06:57:00+02:00',
     context: {
       employeeName: 'Sonia P.',
       shiftTime: '19:00 – 23:00',
@@ -81,6 +82,7 @@ const mockApprovals: ApprovalRequest[] = [
     kind: 'overtime',
     status: 'pending',
     requestedAt: '2026-10-03T06:41:30+02:00',
+    expiresAt: '2026-10-03T06:50:00+02:00',
     context: {
       employeeName: 'Bruno T.',
       shiftTime: '15:00 – 23:00',

@@ -123,6 +123,8 @@ export interface ApprovalRequest {
   requestedAt: string
   decidedBy?: string
   decidedAt?: string
+  /** When the approval offer lapses; drives the kanban countdown. */
+  expiresAt?: string
   /** Display context resolved server-side; no health details ever (spec §10). */
   context: {
     employeeName: string
