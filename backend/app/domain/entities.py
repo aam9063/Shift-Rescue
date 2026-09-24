@@ -29,6 +29,7 @@ class ShiftSlot:
     starts_at: datetime
     ends_at: datetime
     employee_id: str | None
+    status: str = "scheduled"  # scheduled | absent | open | covered
 
 
 @dataclass(frozen=True)
