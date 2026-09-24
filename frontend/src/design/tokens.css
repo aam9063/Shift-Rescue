@@ -57,5 +57,8 @@
   /* Typography — Inter substitutes the proprietary SoDoSans (DESIGN.md §9),
      keeping the tight characteristic tracking */
   --font-sans: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* Serif display face for editorial headings (DESIGN.md "Lander Tall" role):
+     Lora substitutes the proprietary Lander Tall. */
+  --font-serif: Lora, "Iowan Old Style", Georgia, serif;
   --tracking-tight: -0.01em;
 }

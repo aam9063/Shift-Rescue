@@ -3,6 +3,7 @@ import type { RescueCase, Shift } from './types'
 import {
   minutesUntil,
   formatShiftTime,
+  formatCountdown,
   groupShiftsByRole,
   rescueCountdown,
 } from './today'
@@ -99,5 +100,22 @@ describe('rescueCountdown', () => {
   it('marks an overdue deadline', () => {
     const now = new Date('2026-10-03T07:02:00+02:00')
     expect(rescueCountdown(r, now)).toEqual({ minutes: -2, label: 'Overdue', urgent: true })
+  })
+})
+
+describe('formatCountdown', () => {
+  it('renders minutes and seconds remaining as MM:SS', () => {
+    const now = new Date('2026-10-03T06:45:48+02:00')
+    expect(formatCountdown('2026-10-03T06:50:00+02:00', now)).toBe('04:12')
+  })
+
+  it('pads single-digit minutes', () => {
+    const now = new Date('2026-10-03T06:49:05+02:00')
+    expect(formatCountdown('2026-10-03T06:50:00+02:00', now)).toBe('00:55')
+  })
+
+  it('clamps to 00:00 once the deadline has passed', () => {
+    const now = new Date('2026-10-03T06:51:00+02:00')
+    expect(formatCountdown('2026-10-03T06:50:00+02:00', now)).toBe('00:00')
   })
 })

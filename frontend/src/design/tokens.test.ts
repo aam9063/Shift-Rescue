@@ -82,3 +82,7 @@ describe('design tokens (DESIGN.md)', () => {
     )
   })
 })
+
+  it('defines Lora as the serif display substitute for Lander Tall', () => {
+    assertToken(tokens, 'font-serif', 'Lora, "Iowan Old Style", Georgia, serif')
+  })

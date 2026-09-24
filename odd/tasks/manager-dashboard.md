@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **slices 1-3 closed** (Today + Rescue detail + Approvals); UI redesign review pending from user
+Status: **slices 1-3 closed; slice 4 in progress (UI redesign per user mockups)**
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -100,7 +100,44 @@ Final verification slice 2: `pnpm vitest run` 55/55; `pnpm build` clean; `pnpm l
 
 Final verification slice 3: `pnpm vitest run` 68/68; `pnpm build` clean; `pnpm lint` clean.
 
-Next: user reviews the UI and requests definitive visual changes; redesign expected. Feature doc to be updated with the redesign scope when it arrives.
+Next: slice 4 (UI redesign per user mockups) in progress.
+
+## Slice 4 — UI redesign per user mockups (in progress)
+
+User provided two mockups (`frontend/public/img/Hoy@1x.png`,
+`Detalle del rescate@1x.png`), in Spanish; UI stays English. The current
+list-based layout is rejected: Today becomes a kanban board and Rescue
+detail becomes a two-column layout under a dark-green hero band.
+
+### Design decisions (from mockups, mapped to DESIGN.md)
+
+- Display headings switch to a serif face (DESIGN.md "Lander Tall" role):
+  **Lora** substitute, documented in `docs/assumptions.md`.
+- Dark House-Green full-width header band: clock logo, "Shift Rescue"
+  wordmark, centered location pill, white pill CTA "+ Report absence".
+- Today = 4-column kanban: Uncovered / Searching / Needs your approval /
+  Covered today, with count badges and status-accented cards (green/gold
+  top bars), big MM:SS countdowns (red when urgent).
+- Floating circular "+" FAB bottom-right (DESIGN.md Frap treatment).
+- Rescue detail: green hero band with back link, serif title, status pill
+  ("Searching · wave 2 of 3"), giant MM:SS countdown; two-column body:
+  agent timeline (colored dots, AI badge) + candidate cards with score and
+  per-offer status, plus Excluded rows with stable reason codes.
+- Deviation from mockup: an "Approvals" nav entry stays in the header
+  (mockup has none, but the screen must remain reachable).
+
+### Acceptance criteria (slice 4)
+
+- [ ] AC16: Serif display face (Lora) wired as `--font-serif` and used on
+      Today/Detail headings; countdowns render as MM:SS from injected clock.
+- [ ] AC17: Shell header is the dark-green band with logo, location pill,
+      + Report absence CTA and Approvals nav; FAB renders bottom-right.
+- [ ] AC18: Today renders the 4 kanban columns derived by pure helpers
+      (uncovered / seeking / needs approval / covered) with accented cards.
+- [ ] AC19: Rescue detail renders the green hero band (back, serif title,
+      wave pill, giant countdown) and the two-column timeline + candidates
+      (+ Excluded) body.
+- [ ] AC20: All tests green, build and lint clean; commits recorded.
 
 ## Slice 3 — Approvals screen (in progress)
 

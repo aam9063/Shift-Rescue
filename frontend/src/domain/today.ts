@@ -69,3 +69,11 @@ export function rescueCountdown(rescue: RescueCase, now: Date): RescueCountdown 
     urgent: minutes <= URGENT_THRESHOLD_MINUTES,
   }
 }
+
+/** MM:SS remaining until the deadline, clamped at 00:00 when overdue. */
+export function formatCountdown(isoDeadline: string, now: Date): string {
+  const totalSeconds = Math.max(0, Math.floor((new Date(isoDeadline).getTime() - now.getTime()) / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
