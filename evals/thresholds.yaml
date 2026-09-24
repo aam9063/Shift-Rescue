@@ -1,0 +1,7 @@
+# Eval thresholds — blocking CI gates when a real model is evaluated.
+# The offline parser baseline is informational only (never blocks).
+intent_accuracy_min: 0.92
+health_detection_min: 0.95
+conditional_time_accuracy_min: 0.80
+avg_latency_ms_max: 5000
+avg_cost_usd_max: 0.05
