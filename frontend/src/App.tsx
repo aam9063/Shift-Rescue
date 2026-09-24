@@ -1,47 +1,35 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Button } from './components/ui/Button'
-import { RescueDetailScreen } from './screens/RescueDetailScreen'
+import { AppHeader, type AppView } from './components/AppHeader'
+import { Fab } from './components/Fab'
 import { ApprovalsScreen } from './screens/ApprovalsScreen'
+import { RescueDetailScreen } from './screens/RescueDetailScreen'
 import { TodayScreen } from './screens/TodayScreen'
+import { usePendingApprovals } from './services/hooks'
 
 const queryClient = new QueryClient()
 
 /**
- * Themed app shell for the Shift Rescue manager dashboard.
- * Canvas, greens, typography and elevation follow DESIGN.md.
- * Navigation is state-based (selected rescue); a router lands when the
- * number of screens justifies it.
+ * Themed app shell per the user mockups: dark-green header band over the
+ * warm cream canvas, floating action button, state-based navigation
+ * (a router lands when the number of screens justifies it).
  */
 function Shell() {
-  const [view, setView] = useState<'today' | 'approvals'>('today')
+  const [view, setView] = useState<AppView>('today')
   const [selectedRescueId, setSelectedRescueId] = useState<string | null>(null)
+  const { approvals } = usePendingApprovals()
 
   return (
     <div className="min-h-screen bg-canvas font-sans text-text-primary">
-      <header
-        role="banner"
-        className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-black/5 bg-white px-4 shadow-nav md:h-[72px] md:px-6"
-      >
-        <span className="text-lg font-semibold tracking-tight text-green-starbucks">
-          Shift Rescue
-        </span>
-        <nav className="flex items-center gap-2">
-          <Button
-            variant={view === 'today' ? 'dark' : 'secondary'}
-            onClick={() => setView('today')}
-          >
-            Today
-          </Button>
-          <Button
-            variant={view === 'approvals' ? 'dark' : 'secondary'}
-            onClick={() => setView('approvals')}
-          >
-            Approvals
-          </Button>
-        </nav>
-      </header>
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-6">
+      <AppHeader
+        currentView={view}
+        onNavigate={(next) => {
+          setView(next)
+          setSelectedRescueId(null)
+        }}
+        pendingApprovals={approvals?.filter((a) => a.status === 'pending').length ?? 0}
+      />
+      <main className="mx-auto w-full max-w-[1440px] px-4 py-8 md:px-6">
         {selectedRescueId ? (
           <RescueDetailScreen
             rescueId={selectedRescueId}
@@ -56,6 +44,7 @@ function Shell() {
           <TodayScreen onOpenRescue={setSelectedRescueId} />
         )}
       </main>
+      <Fab label="Report absence" />
     </div>
   )
 }
