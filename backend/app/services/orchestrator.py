@@ -8,6 +8,7 @@ every state change writes an AuditEvent (invariant 6, §5.4).
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -201,7 +202,7 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=f"audit_{target.id}_{int(now.timestamp())}_reported",
+                    id=f"audit_{target.id}_{int(now.timestamp())}_{uuid4().hex[:8]}_reported",
                     rescue_id=f"case_{target.id}_{int(now.timestamp())}",
                     type="ABSENCE_REPORTED",
                     payload={"shift_id": target.id},
@@ -240,7 +241,7 @@ class RescueOrchestrator:
             case.status = result.new_state.value
             session.add(
                 AuditEvent(
-                    id=f"audit_{case.id}_opened_{int(now.timestamp())}",
+                    id=f"audit_{case.id}_opened_{int(now.timestamp())}_{uuid4().hex[:8]}",
                     rescue_id=case.id,
                     type="RESCUE_OPENED",
                     payload={},
@@ -522,6 +523,24 @@ class RescueOrchestrator:
                         start="—",
                         end="—",
                     )
+                return True
+
+            if case.status != State.OFFERING.value:
+                # Lost the race: the winner cancelled this offer and covered
+                # the shift. Friendly close-out (invariant 1 + §5.5).
+                if offer.status == "PENDING":
+                    offer.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer.id}_loser",
+                        rescue_id=case.id,
+                        type="OFFER_LOST_RACE",
+                        payload={},
+                        actor=f"employee:{employee_id}",
+                    )
+                )
+                await session.commit()
+                await self._reply_already_covered(employee_id)
                 return True
 
             if _utc(_aware(offer.expires_at)) < _utc(now):

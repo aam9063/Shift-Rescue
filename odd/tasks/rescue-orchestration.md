@@ -1,6 +1,6 @@
 # Feature: Rescue orchestration (`rescue-orchestration`)
 
-Status: **in progress**
+Status: **closed**
 Branch: `feature/rescue-orchestration` (stacked on `feature/domain-rules`)
 Created: 2026-09-24
 
@@ -53,21 +53,29 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 
 - [x] T1 — Deterministic parser (TDD).
 - [x] T2 — Orchestrator: inbound handling, confirmation flow, case opening, first wave (TDD, sqlite).
-- [ ] T3 — Acceptance resolution with row-lock revalidation + approval path (TDD).
-- [ ] T4 — Waves, timeouts and escalation via SimScheduler (TDD).
-- [ ] T5 — Quiet hours + manager location link migration (TDD).
-- [ ] T6 — Race test on real PostgreSQL + §5.5 integration suite + close.
+- [x] T3 — Acceptance resolution with row-lock revalidation + approval path (TDD).
+- [x] T4 — Waves, timeouts and escalation via SimScheduler (TDD).
+- [x] T5 — Quiet hours + manager location link migration (TDD).
+- [x] T6 — Race test on real PostgreSQL + §5.5 integration suite + close.
 
-## Verification evidence
+## Verification evidence (T3-T6)
 
-- T1: RED → GREEN. Parser: 30 tests (confirm/decline vocabulary incl. emoji and digits, absence phrasing with accent/case normalization, retraction, ambiguity → UNCLEAR never acts, health details never extracted). 112/112 suite, lint clean. Commit `c1f685a`.
-- T2: RED → GREEN 6 orchestrator tests. New: `MockWorkforceAdapter` (SQLAlchemy-backed, tz-normalizing), health redaction (`redact_if_health`), es-ES templates module, migration `0003` (`manager.location_ids`). Covered: report → OPEN case + absence_confirm (no manager notice, no offers yet); confirm → OFFERING + 3 offers wave 1 + HRIS absent + audit RESCUE_OPENED/OFFER_SENT + manager notified; duplicate provider_message_id processed once; two shifts → ask_which_shift; confirm without pending → out_of_scope; health text stored as `[redacted: health details]`. 118/118, mypy strict clean. Commit `a0fe30b`.
-  - Design note: OPEN state = "detected, awaiting explicit confirmation"; confirmation drives OPEN→OFFERING (spec: confirm before opening the rescue).
+- T3: acceptance 8 tests (`5c36e80`) — COVERED on unconditional accept (others CANCELLED, HRIS assigned, templates sent), loser gets already_covered, overtime → AWAITING_APPROVAL + ApprovalRequest, decide_approval approves/rejects, decline, withdrawal reopens, cancel_rescue request.
+- T4+T5: 12 tests (`98bebf6`) — SimScheduler drives wave 2 on expiry (previous waves stay alive per §5.3), WAVES_EXHAUSTED/DEADLINE_REACHED escalate with manager notice, approval timeout → OFFERING (request expired), late acceptance after escalation → AWAITING_APPROVAL, quiet hours queue offers to 07:00 (invariant 4) with wave_timeout deferring to the queued send. Domain helper `offers_allowed` + `next_quiet_end` with unit tests.
+- T6: integration on real PostgreSQL (`tests/integration/test_race.py`): acceptance race via asyncio.gather → exactly one ACCEPTED offer, single COVERED case, loser CANCELLED + already_covered, HRIS consistent; duplicate provider_message_id idempotent on PG.
+
+Final: 141 passed with integration (2 tests on real PG), 139/139 unit-only (integration skips without DATABASE_URL); coverage 99.6% (gate 95%); ruff + mypy strict clean.
+
+§5.5 mapping: race → integration; dup message → unit+integration; out-of-scope → unit; ambiguity → unit; manipulation → parser UNCLEAR (unit); withdraw → unit; retract/cancel → unit; late acceptance → unit; HRIS failure & LLM-down → `resilience` feature.
 
 ## Commits
 
-(appended per commit)
+- `c1f685a` feat(backend): deterministic message parser for degraded-mode orchestration (TDD)
+- `a0fe30b` feat(backend): RescueOrchestrator core with idempotent inbound, confirmation flow, case opening and first wave (TDD)
+- `5c36e80` feat(backend): offer acceptance with FOR UPDATE revalidation, approval decisions, decline and withdrawal paths (TDD)
+- `8874939` feat(backend): SimScheduler waves, timeouts, escalation and quiet-hours gating (TDD)
+- race/integration commit: (see git log)
 
 ## Progress / Next step
 
-T1-T2 closed. Next: T3 — acceptance resolution with row-lock revalidation + approval path.
+Feature **rescue-orchestration closed**. Next per spec order: `llm-interpreter` (Feature 3) — Strands-based structured interpretation replacing the deterministic parser, or parallel-track `manager-dashboard` slices.
