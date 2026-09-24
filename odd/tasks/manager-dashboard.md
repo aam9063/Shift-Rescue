@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **slice 1 closed** (Today screen); feature continues with next slice
+Status: **slice 1 closed; slice 2 in progress** (Today screen closed; Rescue detail in progress)
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -80,4 +80,33 @@ conversations, agent decisions, evals, WebSocket live updates, auth, router.
 
 ## Progress / Next step
 
-Slice 1 (Today screen) complete; AC1-AC5 verified. Branch `feature/manager-dashboard` on top of `dev`. Next: user decides push/merge to dev; then slice 2 (Rescue detail or Approvals screen) or backend foundation.
+Slice 1 (Today screen) complete; AC1-AC5 verified. Branch `feature/manager-dashboard` on top of `dev`.
+
+## Slice 2 — Rescue detail screen (in progress)
+
+Spec §7.6 screen 2: detail view for one rescue with live timeline, candidates
+with scores/exclusion reasons, and per-offer status. Navigation stays
+state-based (selected rescue id lifted to `App`); a router lands when the
+number of screens justifies it.
+
+### Scope
+
+- Frontend types for `AuditEvent`, `Offer`, candidate scoring result (mirrors
+  spec §4.1).
+- `DashboardDataSource.getRescueDetail(rescueId)` mock implementation with a
+  realistic case (wave 1 sent, exclusions with stable reason codes).
+- Pure helpers: chronological event sorting, event labels, deterministic
+  candidate ordering (score desc, tie-break by employee id).
+- `RescueDetailScreen`: summary, timeline, candidates table, offers list,
+  back navigation (state-based). Approve/reject actions are rendered but
+  wired in a later slice (needs mutations + approvals flow).
+
+### Acceptance criteria (slice 2)
+
+- [ ] AC6: Rescue detail renders summary, ordered timeline, candidates with
+      human-readable exclusion reasons (stable codes) and offers with status.
+- [ ] AC7: Candidate ordering is deterministic (score desc, tie-break by id).
+- [ ] AC8: Timeline events render chronologically with actor and English
+      labels; no health details anywhere (spec §10).
+- [ ] AC9: Back navigation works via state callback.
+- [ ] AC10: All tests green, build and lint clean; commits recorded.
