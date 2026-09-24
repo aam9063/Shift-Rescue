@@ -1,50 +1,63 @@
+import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Button } from './components/ui/Button'
+import { AppHeader, type AppView } from './components/AppHeader'
+import { Fab } from './components/Fab'
+import { ApprovalsScreen } from './screens/ApprovalsScreen'
+import { RescueDetailScreen } from './screens/RescueDetailScreen'
+import { TodayScreen } from './screens/TodayScreen'
+import { usePendingApprovals } from './services/hooks'
 
 const queryClient = new QueryClient()
 
 /**
- * Themed app shell for the Shift Rescue manager dashboard.
- * Canvas, greens, typography and elevation follow DESIGN.md.
- * Dashboard screens arrive with the `manager-dashboard` feature.
+ * Themed app shell per the user mockups: dark-green header band over the
+ * warm cream canvas, floating action button, state-based navigation
+ * (a router lands when the number of screens justifies it).
  */
-function Shell() {
+function Shell({ now }: { now?: Date }) {
+  const [view, setView] = useState<AppView>('today')
+  const [selectedRescueId, setSelectedRescueId] = useState<string | null>(null)
+  const { approvals } = usePendingApprovals()
+
   return (
     <div className="min-h-screen bg-canvas font-sans text-text-primary">
-      <header
-        role="banner"
-        className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-black/5 bg-white px-4 shadow-nav md:h-[72px] md:px-6"
-      >
-        <span className="text-lg font-semibold tracking-tight text-green-starbucks">
-          Shift Rescue
-        </span>
-        <nav className="flex items-center gap-2">
-          <Button variant="secondary">Sign in</Button>
-          <Button variant="dark">Join now</Button>
-        </nav>
-      </header>
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-6">
-        <h1 className="text-2xl font-semibold leading-9 tracking-tight text-green-starbucks">
-          Today
-        </h1>
-        <p className="mt-2 text-base tracking-tight text-text-secondary">
-          Shift coverage dashboard — screens arrive with the manager-dashboard feature.
-        </p>
-        <section className="mt-6 rounded-card bg-surface p-6 shadow-card">
-          <h2 className="text-xl font-medium tracking-tight">Shifts</h2>
-          <p className="mt-2 text-sm tracking-tight text-text-secondary">
-            Today&apos;s shifts by role, active rescues and coverage countdown will live here.
-          </p>
-        </section>
+      <AppHeader
+        currentView={view}
+        onNavigate={(next) => {
+          setView(next)
+          setSelectedRescueId(null)
+        }}
+        pendingApprovals={approvals?.filter((a) => a.status === 'pending').length ?? 0}
+      />
+      <main className="mx-auto w-full max-w-[1440px] px-4 py-8 md:px-6">
+        {selectedRescueId ? (
+          <RescueDetailScreen
+            rescueId={selectedRescueId}
+            onBack={() => {
+              setSelectedRescueId(null)
+              setView('today')
+            }}
+          />
+        ) : view === 'approvals' ? (
+          <ApprovalsScreen />
+        ) : (
+          <TodayScreen now={now} onOpenRescue={setSelectedRescueId} />
+        )}
       </main>
+      <Fab label="Report absence" />
     </div>
   )
 }
 
-export function App() {
+export interface AppProps {
+  /** Injected clock for deterministic tests; defaults to now. */
+  now?: Date
+}
+
+export function App({ now = new Date() }: AppProps) {
   return (
     <QueryClientProvider client={queryClient}>
-      <Shell />
+      <Shell now={now} />
     </QueryClientProvider>
   )
 }
