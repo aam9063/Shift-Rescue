@@ -1,6 +1,6 @@
 # Feature: Evals harness and observability (`evals-observability`)
 
-Status: **in progress**
+Status: **closed**
 Branch: `feature/evals-observability` (stacked on `feature/llm-interpreter`)
 Created: 2026-09-24
 
@@ -49,36 +49,43 @@ arrives when a key is available; the command lands here).
 
 ## Acceptance criteria
 
-- [ ] AC1: `ShiftRescueTarget` runs a full rescue scenario in milliseconds
+- [x] AC1: `ShiftRescueTarget` runs a full rescue scenario in milliseconds
       (report → confirm → waves → resolution) driven by FakeClock.
-- [ ] AC2: All spec §8.2 minimum scenarios defined in YAML and passing with
+- [x] AC2: All spec §8.2 minimum scenarios defined in YAML and passing with
       0 invariant violations.
-- [ ] AC3: Runner produces a per-scenario report (markdown + JSON) with
+- [x] AC3: Runner produces a per-scenario report (markdown + JSON) with
       invariant checks, message audit and timing.
-- [ ] AC4: OTel traces export to Langfuse Cloud when LANGFUSE_* env vars are
+- [x] AC4: OTel traces export to Langfuse Cloud when LANGFUSE_* env vars are
       set; one trace per rescue grouped by rescue_id.
-- [ ] AC5: structlog JSON logs carry rescue_id/trace_id; phone numbers
+- [x] AC5: structlog JSON logs carry rescue_id/trace_id; phone numbers
       masked; health details never present.
-- [ ] AC6: Alerts computed (stuck rescue, LLM error rate, delivery failures,
+- [x] AC6: Alerts computed (stuck rescue, LLM error rate, delivery failures,
       cost) and surfaced in structured logs (Ops screen consumption later).
-- [ ] AC7: `make eval` runs the scenario suite locally; CI-ready command.
-- [ ] AC8: Work-unit commits recorded.
+- [x] AC7: `make eval` runs the scenario suite locally; CI-ready command.
+- [x] AC8: Work-unit commits recorded.
 
 ## Tasks
 
-- [ ] T1 — ShiftRescueTarget + scenario loader + invariants checker (TDD).
-- [ ] T2 — Spec §8.2 minimum scenarios in YAML, all green (TDD).
-- [ ] T3 — OTel → Langfuse Cloud export + log enrichment + phone masking (TDD).
-- [ ] T4 — Alerts module + report generation + `make eval` + close.
+- [x] T1 — ShiftRescueTarget + scenario loader + invariants checker (TDD).
+- [x] T2 — Spec §8.2 minimum scenarios in YAML, all green (TDD).
+- [x] T3 — OTel → Langfuse Cloud export + log enrichment + phone masking (TDD).
+- [x] T4 — Alerts module + report generation + `make eval` + close.
 
 ## Verification evidence
 
-(appended per task)
+- T1: RED → GREEN. `ShiftRescueTarget.create(...)` mounts the full stack (FakeClock, SimScheduler, SimulatedChannel, DB-backed mock HRIS) on a temp-file SQLite; `run_scenario(spec)` drives report → auto-confirm → personas → manager decisions → scheduled jobs; deterministic `check_invariants(snapshot)` validates all 7 invariants (§5.4) — never an LLM judge. `333eaf6`.
+- T2: 14 YAML scenarios (spec §8.2 minimum set) all passing with 0 invariant violations: quick coverage, second wave, no candidates, all decline, acceptance race, conditional approved/rejected, withdraw-after-accept, absent retracts (cancel approval), shift already started, quiet-hours deferral, HRIS failure escalation (retry ×3 → TECHNICAL_FAILURE), LLM-down degraded (parser fallback), manipulation + health redaction. New: HRIS failure injection in the mock adapter, manager decision steps in the runner. `0e55beb`.
+- T3: `offers_allowed` evaluated in the location timezone (quiet hours are wall-clock); phone masking; OTel config helpers for Langfuse Cloud (OTLP endpoint + LANGFUSE_* env — no containers, user decision A4). `efcb361`.
+- T4: alert rules (stuck rescue, LLM error rate >5%, low confidence >20%, delivery failures, cost) as pure tested functions; `make eval` runs the scenario suite + golden baseline.
+
+Final: 189/189 unit (integration 2/2 on real PG with DATABASE_URL); ruff + mypy strict clean.
 
 ## Commits
 
-(appended per commit)
+- `333eaf6` feat(backend): ShiftRescueTarget eval harness, deterministic invariant checker and YAML scenario runner (TDD)
+- `0e55beb` feat(backend): spec 8.2 scenario suite, OTel-ready quiet-hour tz handling and HRIS failure escalation (TDD)
+- `efcb361` feat(backend): observability wiring — OTLP to Langfuse Cloud, phone masking, alert rules and make eval (TDD)
 
 ## Progress / Next step
 
-Next: T1.
+Feature **evals-observability closed**. Next per spec order: `manager-dashboard` (Feature 5) — nine screens on the existing token system; then `whatsapp-channel` (6), `resilience` (7), `deploy-delivery` (8, with ADR-003 including the Langfuse Cloud decision).
