@@ -94,3 +94,25 @@ export interface RescueDetail {
   candidates: CandidateResult[]
   offers: Offer[]
 }
+
+/* Approval entities (spec §4.1: ApprovalRequest). */
+
+export type ApprovalKind = 'overtime' | 'partial_coverage' | 'schedule_change' | 'cancel_rescue'
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+
+export interface ApprovalRequest {
+  id: string
+  rescueId: string
+  kind: ApprovalKind
+  status: ApprovalStatus
+  requestedAt: string
+  decidedBy?: string
+  decidedAt?: string
+  /** Display context resolved server-side; no health details ever (spec §10). */
+  context: {
+    employeeName: string
+    shiftTime: string
+    detail?: string
+  }
+}

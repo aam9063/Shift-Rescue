@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **slice 1 closed; slice 2 closed** (Today + Rescue detail)
+Status: **slices 1-2 closed; slice 3 in progress** (Today + Rescue detail closed; Approvals in progress)
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -92,7 +92,34 @@ agent only asks before pushing.
 
 Final verification slice 2: `pnpm vitest run` 55/55; `pnpm build` clean; `pnpm lint` clean.
 
-Next: slice 3 candidate — Approvals screen or Approve/reject wiring; or backend foundation.
+Next: slice 3 (Approvals screen) in progress; after that the user reviews the UI and requests visual changes.
+
+## Slice 3 — Approvals screen (in progress)
+
+Spec §7.6 screen 3: pending approvals inbox with approve/reject decisions.
+Navigation grows to a state-based view switch in the shell header (Today /
+Approvals); a router still deferred.
+
+### Scope
+
+- Frontend type `ApprovalRequest` (kind, status, decided_by/at) mirroring
+  spec §4.1.
+- Mock `getPendingApprovals()` plus `decideApproval(id, decision)` in-memory
+  mutation; query invalidation keeps Today and Approvals consistent.
+- Pure helpers: English kind/status labels, oldest-first ordering.
+- `ApprovalsScreen`: pending inbox with context (employee, kind, rescue),
+  Approve/Reject pill buttons, empty state.
+- Shell header nav between Today and Approvals.
+
+### Acceptance criteria (slice 3)
+
+- [ ] AC11: Approvals screen lists pending approvals oldest-first with kind
+      labels, context and approve/reject actions.
+- [ ] AC12: Deciding an approval updates its status, removes it from the
+      inbox and invalidates shared queries (rescue detail reflects it).
+- [ ] AC13: Empty state renders when no approvals are pending.
+- [ ] AC14: Shell header navigates Today <-> Approvals without a router.
+- [ ] AC15: All tests green, build and lint clean; commits recorded.
 
 ## Slice 2 — Rescue detail screen (in progress)
 
