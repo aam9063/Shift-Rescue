@@ -1,0 +1,6 @@
+@import 'tailwindcss';
+@import './design/tokens.css';
+
+body {
+  margin: 0;
+}

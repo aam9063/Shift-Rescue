@@ -1,6 +1,6 @@
 # Feature: Frontend Foundation (`frontend-foundation`)
 
-Status: **in progress**
+Status: **closed**
 Branch: `feature/frontend-foundation`
 Created: 2026-09-24
 
@@ -45,32 +45,42 @@ Out of scope (later features):
 
 ## Acceptance criteria
 
-- [ ] AC1: `frontend/` builds with Vite; `pnpm build` succeeds with zero TS errors.
-- [ ] AC2: `pnpm vitest run` runs as the test runner and all tests pass.
-- [ ] AC3: Design tokens from DESIGN.md exist as Tailwind theme tokens / CSS variables
+- [x] AC1: `frontend/` builds with Vite; `pnpm build` succeeds with zero TS errors.
+- [x] AC2: `pnpm vitest run` runs as the test runner and all tests pass.
+- [x] AC3: Design tokens from DESIGN.md exist as Tailwind theme tokens / CSS variables
       (four greens, gold reserved, cream/ceramic surfaces, text alphas, red/yellow semantics,
       12px card radius, 50px pill radius, space scale, shadow stacks).
-- [ ] AC4: App shell renders on the warm cream canvas (`#f2f0eb`) with Inter and tight
+- [x] AC4: App shell renders on the warm cream canvas (`#f2f0eb`) with Inter and tight
       tracking; a smoke test asserts the themed shell renders.
-- [ ] AC5: `Button` renders full-pill with `scale(0.95)` active state (unit tested).
-- [ ] AC6: Work-unit commits (Conventional Commits) recorded in this document as evidence.
+- [x] AC5: `Button` renders full-pill with `scale(0.95)` active state (unit tested).
+- [x] AC6: Work-unit commits (Conventional Commits) recorded in this document as evidence.
 
 ## Tasks
 
-- [ ] T1 — Repo setup: initial docs commit on `main`, feature branch
+- [x] T1 — Repo setup: initial docs commit on `main`, feature branch
       `feature/frontend-foundation`, tooling check (node 24, pnpm 11).
-- [ ] T2 — Scaffold Vite React-TS app in `frontend/`, install Tailwind, TanStack Query,
+- [x] T2 — Scaffold Vite React-TS app in `frontend/`, install Tailwind, TanStack Query,
       vitest + RTL; first commit.
-- [ ] T3 — Design tokens (TDD): write failing tests asserting token presence (CSS variables
+- [x] T3 — Design tokens (TDD): write failing tests asserting token presence (CSS variables
       on the shell + Button pill/press behavior), then implement tokens in Tailwind theme and
       base components. Commit.
-- [ ] T4 — App shell: header band + cream canvas, smoke test green, `pnpm build` clean.
+- [x] T4 — App shell: header band + cream canvas, smoke test green, `pnpm build` clean.
       Commit. Document Inter substitution in `docs/assumptions.md`.
 
 ## Verification evidence
 
-(appended per task)
+- T1: `ce12d6d` — initial docs commit on `main`; branch `feature/frontend-foundation` created. Tooling: node 24.18.0, pnpm 11.4.0.
+- T2: `67f0713` — Vite 8 + React 19 + TS scaffold; Tailwind v4.3.3, TanStack Query 5, vitest 5. `pnpm vitest run` configured (`vite.config.ts` jsdom + setup).
+- T3: RED observed (2 suites failing: missing `Button.tsx` / `tokens.css`) → GREEN 15/15 → `2460f1a`. Lint clean.
+- T4: RED observed (App test failing: default export, unthemed) → GREEN 18/18; `pnpm build` clean; `pnpm lint` clean. Inter substitution and contract-test approach documented in `docs/assumptions.md` (A1, A3).
+
+## Commits
+
+- `ce12d6d` chore: project docs, design system spec and ODD feature doc
+- `67f0713` feat(frontend): scaffold Vite + React 19 + TypeScript with Tailwind v4, TanStack Query and vitest runner
+- `2460f1a` feat(frontend): DESIGN.md design tokens as Tailwind v4 theme and pill Button primitive (TDD)
+- `0398d20` feat(frontend): themed app shell on cream canvas with pill header CTAs; document font substitution and token-test approach
 
 ## Progress / Next step
 
-Next: T1.
+All tasks T1-T4 complete; AC1-AC5 verified (AC6 satisfied by the commit list above). Feature **frontend-foundation closed** on branch `feature/frontend-foundation` (not merged; push/PR is a human decision).
