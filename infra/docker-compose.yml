@@ -1,0 +1,88 @@
+name: shift-rescue
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shift_rescue
+      POSTGRES_PASSWORD: shift_rescue
+      POSTGRES_DB: shift_rescue
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shift_rescue"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ../backend
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ../backend
+    command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: ../backend
+    command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Observability stack (wired with the evals-observability feature).
+  # Start with: docker compose --profile observability up -d
+  langfuse:
+    image: langfuse/langfuse:2
+    profiles: ["observability"]
+    environment:
+      DATABASE_URL: postgresql://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      NEXTAUTH_SECRET: dev-only-secret
+      SALT: dev-only-salt
+      NEXTAUTH_URL: http://localhost:3000
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
