@@ -11,7 +11,9 @@ from app.domain.parser import Intent, parse_message
 
 
 class TestOfferVocabulary:
-    @pytest.mark.parametrize("text", ["sí", "si", "SÍ", "vale", "ok", "Ok", "1", "👍", "confirmo", "voy"])
+    @pytest.mark.parametrize(
+        "text", ["sí", "si", "SÍ", "vale", "ok", "Ok", "1", "👍", "confirmo", "voy"]
+    )
     def test_confirmation_words(self, text: str) -> None:
         parsed = parse_message(text)
         assert parsed.intent == Intent.CONFIRM

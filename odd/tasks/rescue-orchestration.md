@@ -51,7 +51,7 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 
 ## Tasks
 
-- [ ] T1 — Deterministic parser (TDD).
+- [x] T1 — Deterministic parser (TDD).
 - [ ] T2 — Orchestrator: inbound handling, confirmation flow, case opening, first wave (TDD, sqlite).
 - [ ] T3 — Acceptance resolution with row-lock revalidation + approval path (TDD).
 - [ ] T4 — Waves, timeouts and escalation via SimScheduler (TDD).
@@ -60,7 +60,7 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 
 ## Verification evidence
 
-(appended per task)
+- T1: RED → GREEN. Parser: 30 tests (confirm/decline vocabulary incl. emoji and digits, absence phrasing with accent/case normalization, retraction, ambiguity → UNCLEAR never acts, health details never extracted). 112/112 suite, lint clean. Commit `c1f685a`.
 
 ## Commits
 
@@ -68,4 +68,4 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 
 ## Progress / Next step
 
-Next: T1.
+T1 closed. Next: T2 — orchestrator core (inbound idempotency, confirmation flow, case opening → OFFERING with first wave).

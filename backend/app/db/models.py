@@ -215,6 +215,8 @@ class Manager(Base):
     phone_e164: Mapped[str | None] = mapped_column(String(20), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(200))
     role: Mapped[str] = mapped_column(String(20), default="manager")  # manager | operator
+    # Locations this manager oversees (spec §4.1: manager.location_ids).
+    location_ids: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = _created_at()
 
 

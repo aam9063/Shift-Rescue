@@ -8,10 +8,10 @@ extracted or stored here — redaction happens upstream (spec §10).
 
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Intent(str, Enum):
+class Intent(StrEnum):
     CONFIRM = "CONFIRM"
     DECLINE = "DECLINE"
     ABSENCE_REPORT = "ABSENCE_REPORT"
