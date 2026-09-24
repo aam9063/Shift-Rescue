@@ -29,8 +29,8 @@ def _timestamp_column() -> sa.Column:
 def upgrade() -> None:
     op.create_table(
         "employee",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("location_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("location_id", sa.String(64), nullable=False, index=True),
         sa.Column("full_name", sa.String(120), nullable=False),
         sa.Column("phone_e164", sa.String(20), nullable=False, unique=True),
         sa.Column("language", sa.String(5), nullable=False, server_default="es"),
@@ -44,19 +44,19 @@ def upgrade() -> None:
     )
     op.create_table(
         "shift",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("location_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("location_id", sa.String(64), nullable=False, index=True),
         sa.Column("role", sa.String(20), nullable=False),
         sa.Column("starts_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("ends_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("employee_id", sa.String(36), nullable=True, index=True),
+        sa.Column("employee_id", sa.String(64), nullable=True, index=True),
         sa.Column("status", sa.String(20), nullable=False, server_default="scheduled"),
         _timestamp_column(),
     )
     op.create_table(
         "availability_block",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("employee_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("employee_id", sa.String(64), nullable=False, index=True),
         sa.Column("starts_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("ends_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("kind", sa.String(20), nullable=False),
@@ -64,25 +64,25 @@ def upgrade() -> None:
     )
     op.create_table(
         "rescue_case",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("location_id", sa.String(36), nullable=False, index=True),
-        sa.Column("shift_id", sa.String(36), nullable=False, index=True),
-        sa.Column("absent_employee_id", sa.String(36), nullable=False),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("location_id", sa.String(64), nullable=False, index=True),
+        sa.Column("shift_id", sa.String(64), nullable=False, index=True),
+        sa.Column("absent_employee_id", sa.String(64), nullable=False),
         sa.Column("origin", sa.String(30), nullable=False),
         sa.Column("status", sa.String(30), nullable=False, server_default="OPEN"),
         sa.Column("opened_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("deadline_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("resolution", sa.String(40), nullable=True),
-        sa.Column("covering_employee_id", sa.String(36), nullable=True),
+        sa.Column("covering_employee_id", sa.String(64), nullable=True),
         sa.Column("metrics", sa.JSON(), nullable=False, server_default="{}"),
         _timestamp_column(),
     )
     op.create_table(
         "offer",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("rescue_id", sa.String(36), nullable=False, index=True),
-        sa.Column("employee_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("rescue_id", sa.String(64), nullable=False, index=True),
+        sa.Column("employee_id", sa.String(64), nullable=False, index=True),
         sa.Column("wave_number", sa.Integer(), nullable=False),
         sa.Column("status", sa.String(20), nullable=False, server_default="PENDING"),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=False),
@@ -96,30 +96,30 @@ def upgrade() -> None:
     )
     op.create_table(
         "conversation",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("employee_id", sa.String(36), nullable=True, index=True),
-        sa.Column("manager_id", sa.String(36), nullable=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("employee_id", sa.String(64), nullable=True, index=True),
+        sa.Column("manager_id", sa.String(64), nullable=True),
         sa.Column("channel", sa.String(20), nullable=False),
         sa.Column("last_inbound_at", sa.DateTime(timezone=True), nullable=True),
         _timestamp_column(),
     )
     op.create_table(
         "message",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("conversation_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("conversation_id", sa.String(64), nullable=False, index=True),
         sa.Column("direction", sa.String(10), nullable=False),
         sa.Column("provider_message_id", sa.String(80), nullable=False),
         sa.Column("body_redacted", sa.Text(), nullable=False),
         sa.Column("template_key", sa.String(60), nullable=True),
         sa.Column("delivery_status", sa.String(20), nullable=False, server_default="pending"),
-        sa.Column("rescue_id", sa.String(36), nullable=True, index=True),
+        sa.Column("rescue_id", sa.String(64), nullable=True, index=True),
         _timestamp_column(),
         sa.UniqueConstraint("provider_message_id", name="uq_message_provider_id"),
     )
     op.create_table(
         "interpretation",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("message_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("message_id", sa.String(64), nullable=False, index=True),
         sa.Column("intent", sa.String(30), nullable=False),
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("extracted", sa.JSON(), nullable=False, server_default="{}"),
@@ -133,19 +133,19 @@ def upgrade() -> None:
     )
     op.create_table(
         "approval_request",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("rescue_id", sa.String(36), nullable=False, index=True),
-        sa.Column("offer_id", sa.String(36), nullable=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("rescue_id", sa.String(64), nullable=False, index=True),
+        sa.Column("offer_id", sa.String(64), nullable=True),
         sa.Column("kind", sa.String(30), nullable=False),
         sa.Column("status", sa.String(20), nullable=False, server_default="pending"),
-        sa.Column("decided_by", sa.String(36), nullable=True),
+        sa.Column("decided_by", sa.String(64), nullable=True),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
         _timestamp_column(),
     )
     op.create_table(
         "audit_event",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("rescue_id", sa.String(36), nullable=False, index=True),
+        sa.Column("id", sa.String(64), primary_key=True),
+        sa.Column("rescue_id", sa.String(64), nullable=False, index=True),
         sa.Column("type", sa.String(40), nullable=False),
         sa.Column("payload", sa.JSON(), nullable=False, server_default="{}"),
         sa.Column("actor", sa.String(60), nullable=False, server_default="system"),
@@ -153,7 +153,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "eval_run",
-        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("id", sa.String(64), primary_key=True),
         sa.Column("git_sha", sa.String(40), nullable=False),
         sa.Column("trigger", sa.String(20), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
@@ -163,13 +163,13 @@ def upgrade() -> None:
         sa.Column("metrics", sa.JSON(), nullable=False, server_default="{}"),
         sa.Column("invariant_violations", sa.JSON(), nullable=False, server_default="{}"),
         sa.Column("passed", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("baseline_run_id", sa.String(36), nullable=True),
+        sa.Column("baseline_run_id", sa.String(64), nullable=True),
         sa.Column("report_path", sa.String(200), nullable=True),
         _timestamp_column(),
     )
     op.create_table(
         "location_settings",
-        sa.Column("location_id", sa.String(36), primary_key=True),
+        sa.Column("location_id", sa.String(64), primary_key=True),
         sa.Column("wave_size", sa.Integer(), nullable=False, server_default="3"),
         sa.Column("wave_interval_minutes", sa.Integer(), nullable=False, server_default="10"),
         sa.Column(

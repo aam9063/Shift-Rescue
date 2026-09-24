@@ -33,7 +33,7 @@ class Base(DeclarativeBase):
 
 
 def _pk() -> Mapped[str]:
-    return mapped_column(String(36), primary_key=True, default=_uuid)
+    return mapped_column(String(64), primary_key=True, default=_uuid)
 
 
 def _created_at() -> Mapped[datetime]:
@@ -57,7 +57,7 @@ class Employee(Base):
     __tablename__ = "employee"
 
     id: Mapped[str] = _pk()
-    location_id: Mapped[str] = mapped_column(String(36), index=True)
+    location_id: Mapped[str] = mapped_column(String(64), index=True)
     full_name: Mapped[str] = mapped_column(String(120))
     phone_e164: Mapped[str] = mapped_column(String(20), unique=True)
     language: Mapped[str] = mapped_column(String(5), default="es")  # es | en
@@ -74,11 +74,11 @@ class Shift(Base):
     __tablename__ = "shift"
 
     id: Mapped[str] = _pk()
-    location_id: Mapped[str] = mapped_column(String(36), index=True)
+    location_id: Mapped[str] = mapped_column(String(64), index=True)
     role: Mapped[str] = mapped_column(String(20))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    employee_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    employee_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # scheduled | absent | open | covered
     status: Mapped[str] = mapped_column(String(20), default="scheduled")
     created_at: Mapped[datetime] = _created_at()
@@ -88,7 +88,7 @@ class AvailabilityBlock(Base):
     __tablename__ = "availability_block"
 
     id: Mapped[str] = _pk()
-    employee_id: Mapped[str] = mapped_column(String(36), index=True)
+    employee_id: Mapped[str] = mapped_column(String(64), index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     kind: Mapped[str] = mapped_column(String(20))  # unavailable | preferred_off
@@ -102,16 +102,16 @@ class RescueCase(Base):
     __tablename__ = "rescue_case"
 
     id: Mapped[str] = _pk()
-    location_id: Mapped[str] = mapped_column(String(36), index=True)
-    shift_id: Mapped[str] = mapped_column(String(36), index=True)
-    absent_employee_id: Mapped[str] = mapped_column(String(36))
+    location_id: Mapped[str] = mapped_column(String(64), index=True)
+    shift_id: Mapped[str] = mapped_column(String(64), index=True)
+    absent_employee_id: Mapped[str] = mapped_column(String(64))
     origin: Mapped[str] = mapped_column(String(30))  # employee_message | manager_dashboard
     status: Mapped[str] = mapped_column(String(30), default="OPEN")
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    covering_employee_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    covering_employee_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = _created_at()
 
@@ -120,8 +120,8 @@ class Offer(Base):
     __tablename__ = "offer"
 
     id: Mapped[str] = _pk()
-    rescue_id: Mapped[str] = mapped_column(String(36), index=True)
-    employee_id: Mapped[str] = mapped_column(String(36), index=True)
+    rescue_id: Mapped[str] = mapped_column(String(64), index=True)
+    employee_id: Mapped[str] = mapped_column(String(64), index=True)
     wave_number: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     # PENDING | ACCEPTED | DECLINED | COUNTER_PROPOSED | EXPIRED
@@ -140,8 +140,8 @@ class Conversation(Base):
     __tablename__ = "conversation"
 
     id: Mapped[str] = _pk()
-    employee_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    manager_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    employee_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    manager_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     channel: Mapped[str] = mapped_column(String(20))  # whatsapp | simulated | dashboard
     last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _created_at()
@@ -152,13 +152,13 @@ class Message(Base):
     __table_args__ = (UniqueConstraint("provider_message_id", name="uq_message_provider_id"),)
 
     id: Mapped[str] = _pk()
-    conversation_id: Mapped[str] = mapped_column(String(36), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
     direction: Mapped[str] = mapped_column(String(10))  # inbound | outbound
     provider_message_id: Mapped[str] = mapped_column(String(80))
     body_redacted: Mapped[str] = mapped_column(Text)
     template_key: Mapped[str | None] = mapped_column(String(60), nullable=True)
     delivery_status: Mapped[str] = mapped_column(String(20), default="pending")
-    rescue_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    rescue_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -166,7 +166,7 @@ class Interpretation(Base):
     __tablename__ = "interpretation"
 
     id: Mapped[str] = _pk()
-    message_id: Mapped[str] = mapped_column(String(36), index=True)
+    message_id: Mapped[str] = mapped_column(String(64), index=True)
     intent: Mapped[str] = mapped_column(String(30))
     confidence: Mapped[float] = mapped_column(Float)
     extracted: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -183,13 +183,13 @@ class ApprovalRequest(Base):
     __tablename__ = "approval_request"
 
     id: Mapped[str] = _pk()
-    rescue_id: Mapped[str] = mapped_column(String(36), index=True)
-    offer_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    rescue_id: Mapped[str] = mapped_column(String(64), index=True)
+    offer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # overtime | partial_coverage | schedule_change | cancel_rescue
     kind: Mapped[str] = mapped_column(String(30))
     # pending | approved | rejected | expired
     status: Mapped[str] = mapped_column(String(20), default="pending")
-    decided_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
@@ -198,7 +198,7 @@ class AuditEvent(Base):
     __tablename__ = "audit_event"
 
     id: Mapped[str] = _pk()
-    rescue_id: Mapped[str] = mapped_column(String(36), index=True)
+    rescue_id: Mapped[str] = mapped_column(String(64), index=True)
     type: Mapped[str] = mapped_column(String(40))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     # system | llm | employee:<id> | manager:<id>
@@ -231,7 +231,7 @@ class EvalRun(Base):
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     invariant_violations: Mapped[dict] = mapped_column(JSON, default=dict)
     passed: Mapped[bool] = mapped_column(Boolean, default=False)
-    baseline_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    baseline_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
@@ -239,7 +239,7 @@ class EvalRun(Base):
 class LocationSettings(Base):
     __tablename__ = "location_settings"
 
-    location_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    location_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     wave_size: Mapped[int] = mapped_column(Integer, default=3)
     wave_interval_minutes: Mapped[int] = mapped_column(Integer, default=10)
     rescue_deadline_minutes_before_start: Mapped[int] = mapped_column(Integer, default=30)
