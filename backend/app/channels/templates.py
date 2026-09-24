@@ -40,6 +40,11 @@ _TEMPLATES: dict[str, str] = {
         "avisos de ausencia y coberturas. Para cualquier otra cosa, contacta "
         "con tu encargado."
     ),
+    "manager_escalated": (
+        "No se ha podido cubrir el turno de {role} de {start} a {end}. "
+        "Te dejo el resumen en el panel: revisa a quién contacté y qué opciones "
+        "quedan."
+    ),
     "manager_covered": (
         "{employee_name} cubrirá el turno de {role} de {start} a {end}."
     ),

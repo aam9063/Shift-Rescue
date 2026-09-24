@@ -6,7 +6,7 @@ every state change writes an AuditEvent (invariant 6, §5.4).
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,6 +22,7 @@ from app.db.models import (
     Conversation,
     Employee,
     Location,
+    LocationSettings,
     Manager,
     Message,
     Offer,
@@ -31,6 +32,7 @@ from app.domain.eligibility import evaluate_eligibility
 from app.domain.entities import EligibilityResult, RescueSettings
 from app.domain.entities import Employee as EmployeeEntity
 from app.domain.parser import Intent, parse_message
+from app.domain.quiet_hours import next_quiet_end, offers_allowed
 from app.domain.ranking import RankedCandidate, rank_candidates
 from app.domain.state_machine import SideEffect, State, StateMachineEvent, transition
 from app.integrations.workforce.mock import MockWorkforceAdapter
@@ -255,8 +257,15 @@ class RescueOrchestrator:
             candidates = await self._compute_candidates(case.location_id, shift, now)
             case.status = State.OFFERING.value
 
-            offered_count = await self._send_first_wave(
-                session, case, shift, candidates, location_name, location_tz, now
+            offered_count = await self._send_wave_offers(
+                session,
+                case,
+                shift,
+                candidates,
+                wave_number=1,
+                location_name=location_name,
+                location_tz=location_tz,
+                now=now,
             )
 
             manager = await self._manager_for(case.location_id)
@@ -273,6 +282,8 @@ class RescueOrchestrator:
 
             # Persist the whole OPEN -> OFFERING transition before effects land.
             await session.commit()
+
+        self._schedule_wave_tasks(case, now)
 
     # --- candidates and first wave --------------------------------------------
 
@@ -334,28 +345,54 @@ class RescueOrchestrator:
             del CaseModel
             return counts
 
-    async def _send_first_wave(
+    async def _send_wave_offers(
         self,
         session: AsyncSession,
         case: RescueCase,
         shift: Any,
         ranked: list[RankedCandidate],
+        *,
+        wave_number: int,
         location_name: str,
         location_tz: str,
         now: datetime,
     ) -> int:
+        quiet_start, quiet_end = await self._quiet_hours(case.location_id)
+        if not offers_allowed(now, shift.starts_at, quiet_start, quiet_end):
+            # Invariant 4: never send during quiet hours — defer to their end.
+            deferred_at = next_quiet_end(now, quiet_end)
+            self._scheduler.schedule(
+                deferred_at, "send_wave", {"case_id": case.id, "wave": wave_number}
+            )
+            session.add(
+                AuditEvent(
+                    id=(
+                        f"audit_{case.id}_queued_w{wave_number}_"
+                        f"{int(now.timestamp())}"
+                    ),
+                    rescue_id=case.id,
+                    type="OFFERS_QUEUED",
+                    payload={
+                        "wave": wave_number,
+                        "deferred_to": deferred_at.isoformat(),
+                    },
+                    actor="system",
+                )
+            )
+            return 0
+
         sent = 0
         for candidate in ranked[: self._config.wave_size]:
             employee = await self._employee(candidate.employee_id)
             if employee is None:
                 continue
-            offer_id = f"offer_{case.id}_w1_{candidate.employee_id}"
+            offer_id = f"offer_{case.id}_w{wave_number}_{candidate.employee_id}"
             session.add(
                 Offer(
                     id=offer_id,
                     rescue_id=case.id,
                     employee_id=candidate.employee_id,
-                    wave_number=1,
+                    wave_number=wave_number,
                     status="PENDING",
                     sent_at=now,
                     expires_at=now + timedelta(minutes=self._config.wave_interval_minutes),
@@ -368,7 +405,7 @@ class RescueOrchestrator:
                     id=f"audit_{offer_id}_sent",
                     rescue_id=case.id,
                     type="OFFER_SENT",
-                    payload={"offer_id": offer_id, "wave": 1},
+                    payload={"offer_id": offer_id, "wave": wave_number},
                     actor="system",
                 )
             )
@@ -452,6 +489,41 @@ class RescueOrchestrator:
                 )
             ).scalar_one()
 
+            if case.status == State.ESCALATED.value:
+                # Late acceptance after escalation: the manager decides (§5.5).
+                result = transition(State.ESCALATED, StateMachineEvent.LATE_ACCEPTANCE)
+                case.status = result.new_state.value
+                session.add(
+                    ApprovalRequest(
+                        id=f"appr_late_{offer.id}",
+                        rescue_id=case.id,
+                        offer_id=offer.id,
+                        kind="overtime" if offer.requires_approval else "schedule_change",
+                        status="pending",
+                    )
+                )
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer.id}_late",
+                        rescue_id=case.id,
+                        type="APPROVAL_REQUESTED",
+                        payload={"reason": "late_acceptance"},
+                        actor=f"employee:{employee_id}",
+                    )
+                )
+                await session.commit()
+                manager = await self._manager_for(case.location_id)
+                if manager is not None and manager.get("phone_e164"):
+                    await self._send_template(
+                        to=manager["phone_e164"],
+                        template_key="manager_covered",
+                        employee_name=await self._employee_name(employee_id),
+                        role="—",
+                        start="—",
+                        end="—",
+                    )
+                return True
+
             if _utc(_aware(offer.expires_at)) < _utc(now):
                 offer.status = "EXPIRED"
                 session.add(
@@ -514,6 +586,10 @@ class RescueOrchestrator:
                 manager = await self._manager_for(case.location_id)
                 location_name, location_tz = await self._location_info(case.location_id)
                 await session.commit()
+                # Manager must decide before the rescue deadline (§4.2).
+                self._scheduler.schedule(
+                    _aware(case.deadline_at), "approval_timeout", {"case_id": case.id}
+                )
 
                 employee = await self._employee(employee_id)
                 if employee is not None and manager is not None:
@@ -869,6 +945,201 @@ class RescueOrchestrator:
         for offer in pending:
             offer.status = "SUPERSEDED"
 
+    def task_handlers(self) -> dict[str, Any]:
+        """Task registry: SimScheduler and Celery tasks route to these."""
+        return {
+            "wave_timeout": self._on_wave_timeout,
+            "rescue_deadline": self._on_deadline,
+            "approval_timeout": self._on_approval_timeout,
+            "send_wave": self._on_send_wave,
+        }
+
+    # --- scheduled handlers ----------------------------------------------------
+
+    async def _on_wave_timeout(self, payload: dict[str, Any]) -> None:
+        now = self._clock.now()
+        case_id = payload["case_id"]
+        async with self._sessions() as session:
+            case = (
+                await session.execute(select(RescueCase).where(RescueCase.id == case_id))
+            ).scalar_one_or_none()
+            if case is None or case.status != State.OFFERING.value:
+                return  # covered / cancelled / escalated: nothing to do
+            queued = (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.rescue_id == case.id,
+                        AuditEvent.type == "OFFERS_QUEUED",
+                    )
+                )
+            ).scalars().first()
+            if queued is not None:
+                return  # a deferred send_wave owns the next offer batch
+            if _aware(case.deadline_at) <= now:
+                await self._escalate(session, case, StateMachineEvent.DEADLINE_REACHED)
+                await session.commit()
+                await self._notify_escalation(case)
+                return
+
+            shift = await self._workforce.get_shift(case.shift_id)
+            if shift is None:
+                return
+            ranked = await self._compute_candidates(case.location_id, shift, now)
+            offered_ids = {
+                o.employee_id
+                for o in (
+                    await session.execute(select(Offer).where(Offer.rescue_id == case.id))
+                ).scalars()
+            }
+            next_candidates = [c for c in ranked if c.employee_id not in offered_ids]
+            if not next_candidates:
+                await self._escalate(session, case, StateMachineEvent.WAVES_EXHAUSTED)
+                await session.commit()
+                await self._notify_escalation(case)
+                return
+
+            last_wave = (
+                await session.execute(
+                    select(Offer.wave_number).where(Offer.rescue_id == case.id)
+                )
+            ).scalars().all()
+            next_wave = max(last_wave) + 1
+            location_name, location_tz = await self._location_info(case.location_id)
+            await self._send_wave_offers(
+                session,
+                case,
+                shift,
+                next_candidates,
+                wave_number=next_wave,
+                location_name=location_name,
+                location_tz=location_tz,
+                now=now,
+            )
+            await session.commit()
+            self._schedule_wave_tasks(case, now)
+
+    async def _on_deadline(self, payload: dict[str, Any]) -> None:
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == payload["case_id"])
+                )
+            ).scalar_one_or_none()
+            if case is None or case.status != State.OFFERING.value:
+                return
+            await self._escalate(session, case, StateMachineEvent.DEADLINE_REACHED)
+            await session.commit()
+            await self._notify_escalation(case)
+
+    async def _on_approval_timeout(self, payload: dict[str, Any]) -> None:
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == payload["case_id"])
+                )
+            ).scalar_one_or_none()
+            if case is None or case.status != State.AWAITING_APPROVAL.value:
+                return
+            result = transition(State.AWAITING_APPROVAL, StateMachineEvent.APPROVAL_TIMEOUT)
+            case.status = result.new_state.value
+            approvals = (
+                await session.execute(
+                    select(ApprovalRequest).where(
+                        ApprovalRequest.rescue_id == case.id,
+                        ApprovalRequest.status == "pending",
+                    )
+                )
+            ).scalars()
+            for approval in approvals:
+                approval.status = "expired"
+            session.add(
+                AuditEvent(
+                    id=f"audit_{case.id}_approval_timeout_{int(self._clock.now().timestamp())}",
+                    rescue_id=case.id,
+                    type="APPROVAL_TIMEOUT",
+                    payload={},
+                    actor="system",
+                )
+            )
+            await session.commit()
+
+    async def _on_send_wave(self, payload: dict[str, Any]) -> None:
+        """Deferred wave send (quiet-hours gate)."""
+        now = self._clock.now()
+        case_id = payload["case_id"]
+        wave = payload.get("wave", 1)
+        async with self._sessions() as session:
+            case = (
+                await session.execute(select(RescueCase).where(RescueCase.id == case_id))
+            ).scalar_one_or_none()
+            if case is None or case.status != State.OFFERING.value:
+                return
+            already = (
+                await session.execute(
+                    select(Offer).where(Offer.rescue_id == case.id, Offer.wave_number == wave)
+                )
+            ).scalars().first()
+            if already is not None:
+                return
+            shift = await self._workforce.get_shift(case.shift_id)
+            if shift is None:
+                return
+            ranked = await self._compute_candidates(case.location_id, shift, now)
+            location_name, location_tz = await self._location_info(case.location_id)
+            await self._send_wave_offers(
+                session,
+                case,
+                shift,
+                ranked,
+                wave_number=wave,
+                location_name=location_name,
+                location_tz=location_tz,
+                now=now,
+            )
+            await session.commit()
+
+    async def _escalate(
+        self, session: AsyncSession, case: RescueCase, event: StateMachineEvent
+    ) -> None:
+        result = transition(State.OFFERING, event)
+        case.status = result.new_state.value
+        session.add(
+            AuditEvent(
+                id=(
+                    f"audit_{case.id}_escalated_"
+                    f"{int(self._clock.now().timestamp())}_{event.name}"
+                ),
+                rescue_id=case.id,
+                type="ESCALATED",
+                payload={"reason": event.name},
+                actor="system",
+            )
+        )
+
+    async def _notify_escalation(self, case: RescueCase) -> None:
+        manager = await self._manager_for(case.location_id)
+        if manager is None or not manager.get("phone_e164"):
+            return
+        shift = await self._workforce.get_shift(case.shift_id)
+        location_name, location_tz = await self._location_info(case.location_id)
+        await self._send_template(
+            to=manager["phone_e164"],
+            template_key="manager_escalated",
+            role=self._role_label(shift.role) if shift else "—",
+            start=self._fmt(shift.starts_at, location_tz) if shift else "—",
+            end=self._fmt(shift.ends_at, location_tz) if shift else "—",
+        )
+
+    def _schedule_wave_tasks(self, case: RescueCase, now: datetime) -> None:
+        self._scheduler.schedule(
+            now + timedelta(minutes=self._config.wave_interval_minutes),
+            "wave_timeout",
+            {"case_id": case.id},
+        )
+        self._scheduler.schedule(
+            _aware(case.deadline_at), "rescue_deadline", {"case_id": case.id}
+        )
+
     # --- helpers ---------------------------------------------------------------
 
     def _deadline_for(self, now: datetime, shift: Any) -> datetime:
@@ -953,6 +1224,19 @@ class RescueOrchestrator:
             location_name=location_name,
         )
 
+    async def _quiet_hours(self, location_id: str) -> tuple[time, time]:
+        async with self._sessions() as session:
+            row = (
+                await session.execute(
+                    select(LocationSettings).where(
+                        LocationSettings.location_id == location_id
+                    )
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return time(23, 0), time(7, 0)
+        return _parse_time(row.quiet_hours_start), _parse_time(row.quiet_hours_end)
+
     def _phone_of(self, employee: dict[str, Any]) -> str:
         return employee["phone_e164"]
 
@@ -979,6 +1263,11 @@ def _aware(moment: datetime) -> datetime:
     if moment.tzinfo is None:
         return moment.replace(tzinfo=UTC)
     return moment
+
+
+def _parse_time(value: str) -> time:
+    hour, minute = value.split(":")
+    return time(int(hour), int(minute))
 
 
 __all__ = ["OrchestratorConfig", "RescueOrchestrator", "SideEffect", "State"]

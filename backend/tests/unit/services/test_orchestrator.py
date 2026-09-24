@@ -4,122 +4,12 @@ Runs against SQLite with the DB-backed mock workforce adapter, an in-memory
 channel and scheduler, and a FakeClock.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
-import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import func, select
 
-from app.core.clock import FakeClock
-from app.db.models import Base
-from app.db.seed import DEMO_LOCATION_ID, DEMO_LOCATION_NAME, DEMO_MANAGER_EMAIL
-from app.integrations.workforce.mock import MockWorkforceAdapter
-from app.services.orchestrator import RescueOrchestrator
-
-
-@pytest.fixture()
-async def db():
-    engine = create_async_engine("sqlite+aiosqlite://")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
-
-
-@pytest.fixture()
-def now() -> datetime:
-    return datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
-
-
-@pytest.fixture()
-async def world(db, now):
-    """Minimal world: location, manager, 4 floor employees, one absent shift."""
-    from app.db.models import Employee, Location, Manager, Shift
-
-    async with db() as session:
-        session.add(Location(id=DEMO_LOCATION_ID, name=DEMO_LOCATION_NAME, timezone="UTC"))
-        session.add(
-            Manager(
-                id="mgr_1",
-                name="Demo Manager",
-                email=DEMO_MANAGER_EMAIL,
-                phone_e164="+34600999001",
-                password_hash="x",
-                role="manager",
-                location_ids=[DEMO_LOCATION_ID],
-            )
-        )
-        for i in range(1, 5):
-            session.add(
-                Employee(
-                    id=f"emp_{i:02d}_floor",
-                    location_id=DEMO_LOCATION_ID,
-                    full_name=f"Floor {i}",
-                    phone_e164=f"+3460000000{i}",
-                    language="es",
-                    roles=["floor"],
-                    contract_weekly_hours=30,
-                    max_weekly_hours=40,
-                    home_zone="port",
-                    accepts_extra_shifts=True,
-                    active=True,
-                )
-            )
-        session.add(
-            Shift(
-                id="shift_1",
-                location_id=DEMO_LOCATION_ID,
-                role="floor",
-                starts_at=now + timedelta(minutes=20),
-                ends_at=now + timedelta(hours=8, minutes=20),
-                employee_id="emp_01_floor",
-                status="scheduled",
-            )
-        )
-        await session.commit()
-
-    class World:
-        def __init__(self) -> None:
-            self.session_factory = db
-            self.workforce = MockWorkforceAdapter(db)
-            self.clock = FakeClock(now)
-            self.channel = RecordingChannel()
-            self.scheduler = RecordingScheduler()
-            self.orchestrator = RescueOrchestrator(
-                session_factory=db,
-                workforce=self.workforce,
-                channel=self.channel,
-                scheduler=self.scheduler,
-                clock=self.clock,
-            )
-
-    return World()
-
-
-class RecordingChannel:
-    def __init__(self) -> None:
-        self.sent: list[dict] = []
-
-    async def send(self, recipient_phone_e164, body, *, template_key=None, rescue_id=None):
-        self.sent.append(
-            {
-                "to": recipient_phone_e164,
-                "body": body,
-                "template_key": template_key,
-                "rescue_id": rescue_id,
-            }
-        )
-        return f"prov_{len(self.sent)}"
-
-
-class RecordingScheduler:
-    def __init__(self) -> None:
-        self.scheduled: list[tuple] = []
-
-    def schedule(self, run_at, task_name, payload):
-        self.scheduled.append((run_at, task_name, payload))
-        return f"job_{len(self.scheduled)}"
-
+from app.db.models import AuditEvent, Message, Offer, RescueCase, Shift
+from app.db.seed import DEMO_LOCATION_ID
 
 CONVERSATION = "conv_1"
 PROVIDER_ID = "provider_msg_1"
@@ -133,9 +23,7 @@ async def test_absence_report_sends_confirmation_and_no_case_yet(world, db, now)
         text="me encuentro fatal, hoy no puedo ir",
     )
 
-    from sqlalchemy import select
 
-    from app.db.models import RescueCase
 
     async with db() as session:
         cases = (await session.execute(select(RescueCase))).scalars().all()
@@ -165,9 +53,8 @@ async def test_confirmation_opens_case_offering_with_first_wave(world, db, now) 
         text="sí",
     )
 
-    from sqlalchemy import select
 
-    from app.db.models import AuditEvent, Offer, RescueCase, Shift
+    from app.db.models import Shift
 
     async with db() as session:
         case = (await session.execute(select(RescueCase))).scalar_one()
@@ -209,9 +96,7 @@ async def test_duplicate_provider_message_is_processed_once(world, db) -> None:
         text="me encuentro fatal, hoy no puedo ir",
     )
 
-    from sqlalchemy import func, select
 
-    from app.db.models import Message
 
     async with db() as session:
         count = (await session.execute(select(func.count()).select_from(Message))).scalar_one()
@@ -220,7 +105,6 @@ async def test_duplicate_provider_message_is_processed_once(world, db) -> None:
 
 
 async def test_two_shifts_same_day_asks_which_one(world) -> None:
-    from app.db.models import Shift
 
     async with world.session_factory() as session:
         session.add(
@@ -258,9 +142,7 @@ async def test_confirm_without_pending_gets_polite_redirect(world) -> None:
 
     redirects = [m for m in world.channel.sent if m["template_key"] == "out_of_scope"]
     assert len(redirects) == 1
-    from sqlalchemy import func, select
 
-    from app.db.models import RescueCase
 
     async with world.session_factory() as session:
         cases = (await session.execute(select(func.count()).select_from(RescueCase))).scalar_one()
@@ -275,9 +157,7 @@ async def test_health_details_are_redacted_before_persisting(world, db) -> None:
         text="me encuentro fatal, tengo migraña y fiebre, hoy no puedo ir",
     )
 
-    from sqlalchemy import select
 
-    from app.db.models import Message
 
     async with db() as session:
         messages = (await session.execute(select(Message))).scalars().all()

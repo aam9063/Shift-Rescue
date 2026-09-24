@@ -9,11 +9,6 @@ from app.db.seed import DEMO_LOCATION_ID
 from tests.unit.services.test_orchestrator import (  # noqa: F401
     CONVERSATION,
     PROVIDER_ID,
-    RecordingChannel,
-    RecordingScheduler,
-    db,
-    now,
-    world,
 )
 
 
@@ -138,7 +133,7 @@ class TestOvertimeApproval:
         assert pending
 
     async def test_manager_approval_covers(self, overtime_world, db) -> None:
-        offers = await _run_to_offering(overtime_world)
+        await _run_to_offering(overtime_world)
         await _accept(overtime_world, "emp_02_floor", "accept_ot")
 
         from app.db.models import ApprovalRequest
@@ -162,7 +157,7 @@ class TestOvertimeApproval:
             assert approval.status == "approved"
 
     async def test_manager_rejection_resumes_offering(self, overtime_world, db) -> None:
-        offers = await _run_to_offering(overtime_world)
+        await _run_to_offering(overtime_world)
         await _accept(overtime_world, "emp_02_floor", "accept_ot")
 
         from app.db.models import ApprovalRequest
