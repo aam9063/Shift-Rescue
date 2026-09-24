@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **in progress**
+Status: **slice 1 closed** (Today screen); feature continues with next slice
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -43,35 +43,41 @@ conversations, agent decisions, evals, WebSocket live updates, auth, router.
 
 ## Acceptance criteria (DoD slice 1)
 
-- [ ] AC1: Shift domain types + mock data exist behind a service interface;
+- [x] AC1: Shift domain types + mock data exist behind a service interface;
       components never import the mock directly (they go through hooks).
-- [ ] AC2: Today screen renders the day's shifts grouped by role in order
+- [x] AC2: Today screen renders the day's shifts grouped by role in order
       (kitchen, floor, bar, cleaning, supervisor) with role labels and times.
-- [ ] AC3: Each shift shows its status (`scheduled` | `absent` | `open` |
+- [x] AC3: Each shift shows its status (`scheduled` | `absent` | `open` |
       `covered`) with distinct visual treatment per DESIGN.md semantics.
-- [ ] AC4: Active rescues are highlighted with a countdown to the deadline
+- [x] AC4: Active rescues are highlighted with a countdown to the deadline
       (minutes remaining, computed from injected clock — no `Date.now()` in
       domain/helpers).
-- [ ] AC5: All tests green (`pnpm vitest run`), `pnpm build` and `pnpm lint`
+- [x] AC5: All tests green (`pnpm vitest run`), `pnpm build` and `pnpm lint`
       clean; work-unit commits recorded below.
 
 ## Tasks
 
-- [ ] T1 — Domain types + mock data service + pure helpers (TDD: helpers RED
+- [x] T1 — Domain types + mock data service + pure helpers (TDD: helpers RED
       first), then GREEN.
-- [ ] T2 — `useTodayShifts` query hook + `TodayScreen` with grouped shift
+- [x] T2 — `useTodayShifts` query hook + `TodayScreen` with grouped shift
       cards and status badges (TDD), then GREEN.
-- [ ] T3 — Active rescue banner with countdown (TDD), then GREEN.
-- [ ] T4 — Verify all, update feature doc, work-unit commits.
+- [x] T3 — Active rescue banner with countdown (TDD), then GREEN.
+- [x] T4 — Verify all, update feature doc, work-unit commits.
 
 ## Verification evidence
 
-(appended per task)
+- T1: RED (`6ab708c` tests failing on missing modules) → GREEN 28/28 → `07a4db4`.
+- T2: RED (mock + screen suites failing on missing modules) → GREEN 35/35 → `704263e`. QueryClient test helper added (`renderWithProviders`).
+- T3: RED (banner suite failing) → GREEN 40/40 → `86c996b`. Banner wired into TodayScreen; App shell renders TodayScreen; h1 always present.
+- Final: `pnpm vitest run` 40/40; `pnpm build` clean; `pnpm lint` clean.
 
 ## Commits
 
-(appended per commit)
+- `6ab708c` test(frontend): RED contract tests for today-screen domain helpers and open manager-dashboard feature doc
+- `07a4db4` feat(frontend): shift/rescue domain types and pure today-screen helpers (TDD)
+- `704263e` feat(frontend): Today screen with role-grouped shift cards, status badges and mock data source (TDD)
+- `86c996b` feat(frontend): active rescue banner with deadline countdown wired into Today screen (TDD)
 
 ## Progress / Next step
 
-Next: T1.
+Slice 1 (Today screen) complete; AC1-AC5 verified. Branch `feature/manager-dashboard` on top of `dev`. Next: user decides push/merge to dev; then slice 2 (Rescue detail or Approvals screen) or backend foundation.
