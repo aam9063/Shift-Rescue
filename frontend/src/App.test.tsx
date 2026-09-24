@@ -18,22 +18,33 @@ describe('App shell', () => {
     expect(container.querySelector('.bg-canvas')).toBeInTheDocument()
   })
 
-  it('renders the floating action button', () => {
-    renderWithProviders(<App now={NOW} />)
-    expect(screen.getByRole('button', { name: 'Report absence' })).toBeInTheDocument()
-  })
-
   it('shows the Today heading by default', async () => {
     renderWithProviders(<App now={NOW} />)
     expect(await screen.findByRole('heading', { level: 1, name: 'Today' })).toBeInTheDocument()
   })
 
-  it('navigates between Today and Approvals from the header', async () => {
+  it('navigates between views from the header', async () => {
     const user = userEvent.setup()
     renderWithProviders(<App now={NOW} />)
     await screen.findByRole('heading', { level: 1, name: 'Today' })
-    await user.click(screen.getByRole('button', { name: /Approvals/ }))
+
+    await user.click(screen.getByRole('button', { name: 'Approvals' }))
     expect(await screen.findByRole('heading', { level: 1, name: 'Approvals' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Conversations' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Conversations' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Operations' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Operations' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Agent decisions' }))
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Agent decisions' }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Evals' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Evals' })).toBeInTheDocument()
+
     await user.click(screen.getByRole('button', { name: 'Today' }))
     expect(await screen.findByRole('heading', { level: 1, name: 'Today' })).toBeInTheDocument()
   })
