@@ -1,0 +1,61 @@
+/*
+ * Design tokens from DESIGN.md (Starbucks-inspired design system).
+ * Single source of truth for colors, typography, spacing, radii and shadows.
+ * Consumed as Tailwind v4 @theme tokens; the tokens.test.ts contract tests
+ * lock these exact values.
+ */
+@theme {
+  /* Four-tier green system — each tier has a distinct surface role */
+  --color-green-starbucks: #006241; /* brand headings */
+  --color-green-accent: #00754A; /* primary CTAs */
+  --color-green-house: #1E3932; /* feature bands, footer, dark surfaces */
+  --color-green-uplift: #2b5148; /* decorative accents */
+  --color-green-light: #d4e9e2; /* pale mint utility surfaces */
+
+  /* Warm neutral canvas — never pure white as page canvas */
+  --color-canvas: #f2f0eb; /* primary page canvas (neutral warm) */
+  --color-ceramic: #edebe9; /* zone separators, soft washes */
+  --color-surface: #ffffff; /* cards, modals */
+  --color-neutral-cool: #f9f9f9; /* dropdowns, quiet utility containers */
+
+  /* Gold — reserved for status ceremony, never a general accent */
+  --color-gold: #cba258;
+  --color-gold-light: #dfc49d;
+  --color-gold-lightest: #faf6ee;
+
+  /* Semantic states */
+  --color-error: #c82014;
+  --color-warning: #fbbc05;
+
+  /* Text — body text never uses pure black on light surfaces */
+  --color-text-primary: rgba(0, 0, 0, 0.87);
+  --color-text-secondary: rgba(0, 0, 0, 0.58);
+  --color-text-on-dark: rgba(255, 255, 255, 1);
+  --color-text-on-dark-soft: rgba(255, 255, 255, 0.7);
+
+  /* Border radius scale */
+  --radius-card: 12px;
+  --radius-pill: 50px;
+
+  /* Rem-based spacing scale (anchored 1rem = 10px upstream; 1rem = 16px here,
+     values preserved as absolute rem from DESIGN.md) */
+  --space-1: 0.4rem;
+  --space-2: 0.8rem;
+  --space-3: 1.6rem;
+  --space-4: 2.4rem;
+  --space-5: 3.2rem;
+  --space-6: 4rem;
+  --space-7: 4.8rem;
+  --space-8: 5.6rem;
+  --space-9: 6.4rem;
+
+  /* Layered whisper-soft shadow stacks — never a single heavy drop shadow */
+  --shadow-card: 0 0 0.5px rgba(0, 0, 0, 0.14), 0 1px 1px rgba(0, 0, 0, 0.24);
+  --shadow-nav: 0 1px 3px rgba(0, 0, 0, 0.1), 0 2px 2px rgba(0, 0, 0, 0.06), 0 0 2px rgba(0, 0, 0, 0.07);
+  --shadow-frap: 0 0 6px rgba(0, 0, 0, 0.24), 0 8px 12px rgba(0, 0, 0, 0.14);
+
+  /* Typography — Inter substitutes the proprietary SoDoSans (DESIGN.md §9),
+     keeping the tight characteristic tracking */
+  --font-sans: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --tracking-tight: -0.01em;
+}
