@@ -1,4 +1,4 @@
-import type { RescueCase, Shift } from '../domain/types'
+import type { RescueCase, RescueDetail, Shift } from '../domain/types'
 
 /**
  * Data source abstraction for the dashboard. Today it is satisfied by mock
@@ -9,6 +9,7 @@ import type { RescueCase, Shift } from '../domain/types'
 export interface DashboardDataSource {
   getShifts(dayIso: string): Promise<Shift[]>
   getActiveRescues(): Promise<RescueCase[]>
+  getRescueDetail(rescueId: string): Promise<RescueDetail>
 }
 
 const LOCATION_ID = 'la-terraza-del-puerto'
@@ -44,4 +45,43 @@ export class MockDashboardDataSource implements DashboardDataSource {
   async getActiveRescues(): Promise<RescueCase[]> {
     return mockRescues
   }
+
+  async getRescueDetail(rescueId: string): Promise<RescueDetail> {
+    const rescue = mockRescues.find((r) => r.id === rescueId)
+    if (!rescue) {
+      throw new Error(`Unknown rescue: ${rescueId}`)
+    }
+    const shift = mockShifts.find((s) => s.id === rescue.shiftId)
+    if (!shift) {
+      throw new Error(`Unknown shift for rescue: ${rescueId}`)
+    }
+    return {
+      rescue,
+      shift,
+      timeline: rescueTimeline(rescueId),
+      candidates: rescueCandidates,
+      offers: rescueOffers(rescueId),
+    }
+  }
 }
+
+const rescueTimeline = (rescueId: string) => [
+  { id: 'evt_1', rescueId, type: 'RESCUE_OPENED' as const, actor: 'system', createdAt: '2026-10-03T06:40:00+02:00' },
+  { id: 'evt_2', rescueId, type: 'ABSENCE_MARKED' as const, actor: 'system', createdAt: '2026-10-03T06:40:01+02:00' },
+  { id: 'evt_3', rescueId, type: 'CANDIDATES_COMPUTED' as const, actor: 'system', createdAt: '2026-10-03T06:40:02+02:00' },
+  { id: 'evt_4', rescueId, type: 'OFFER_SENT' as const, actor: 'system', createdAt: '2026-10-03T06:41:00+02:00' },
+  { id: 'evt_5', rescueId, type: 'OFFER_DECLINED' as const, actor: 'employee:emp_bar_02', createdAt: '2026-10-03T06:44:00+02:00' },
+]
+
+const rescueCandidates = [
+  { employeeId: 'emp_sala_02', name: 'María G.', score: 0.86, eligible: true, requiresApproval: false, reasons: [] },
+  { employeeId: 'emp_sala_05', name: 'Bruno T.', score: 0.74, eligible: true, requiresApproval: true, reasons: [{ code: 'OVERTIME_APPROVAL', message: 'Would exceed contracted 30h weekly hours' }] },
+  { employeeId: 'emp_bar_02', name: 'Pablo S.', score: 0.71, eligible: true, requiresApproval: false, reasons: [] },
+  { employeeId: 'emp_kitchen_04', name: 'Nerea V.', score: 0.0, eligible: false, requiresApproval: false, reasons: [{ code: 'REST_VIOLATION', message: 'Last shift ended 23:30, only 7.5h rest' }] },
+  { employeeId: 'emp_office_01', name: 'Sara D.', score: 0.0, eligible: false, requiresApproval: false, reasons: [{ code: 'ROLE_MISMATCH', message: 'Office staff cannot cover floor shifts' }] },
+]
+
+const rescueOffers = (rescueId: string) => [
+  { id: 'offer_1', rescueId, employeeName: 'Bruno T.', waveNumber: 1, status: 'PENDING' as const, sentAt: '2026-10-03T06:41:00+02:00', expiresAt: '2026-10-03T06:51:00+02:00' },
+  { id: 'offer_2', rescueId, employeeName: 'Pablo S.', waveNumber: 1, status: 'DECLINED' as const, sentAt: '2026-10-03T06:41:00+02:00', expiresAt: '2026-10-03T06:51:00+02:00' },
+]
