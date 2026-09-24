@@ -1,6 +1,6 @@
 # Feature: WhatsApp real (`whatsapp-channel`)
 
-Status: **in progress**
+Status: **code complete; real-phone demo pending user setup**
 Branch: `feature/whatsapp-channel` (stacked on `feature/evals-observability`)
 Created: 2026-09-24
 
@@ -30,25 +30,32 @@ media messages.
 
 ## Acceptance criteria
 
-- [ ] AC1: Signature validation rejects forged/absent signatures and accepts
+- [x] AC1: Signature validation rejects forged/absent signatures and accepts
       valid ones (unit-tested with computed HMAC).
-- [ ] AC2: Inbound webhook maps the sender phone → employee and triggers the
+- [x] AC2: Inbound webhook maps the sender phone → employee and triggers the
       orchestrator; duplicate MessageSid processed once (204).
-- [ ] AC3: Status callback updates `Message.delivery_status`.
-- [ ] AC4: `TwilioWhatsAppChannel.send` posts the correct form to Twilio and
+- [x] AC3: Status callback updates `Message.delivery_status`.
+- [x] AC4: `TwilioWhatsAppChannel.send` posts the correct form to Twilio and
       returns the provider message id (httpx MockTransport test).
-- [ ] AC5: Sandbox setup guide written; DoD demo documented (2 real phones).
-- [ ] AC6: Work-unit commits recorded.
+- [x] AC5: Sandbox setup guide written; DoD demo documented (2 real phones).
+- [x] AC6: Work-unit commits recorded.
 
 ## Tasks
 
-- [ ] T1 — Signature validator + config + TwilioWhatsAppChannel (TDD).
-- [ ] T2 — Webhook inbound/status endpoints wired to the orchestrator (TDD).
-- [ ] T3 — Sandbox setup guide + verification with real phones (user-assisted).
+- [x] T1 — Signature validator + config + TwilioWhatsAppChannel (TDD).
+- [x] T2 — Webhook inbound/status endpoints wired to the orchestrator (TDD).
+- [x] T3 — Sandbox guide written (docs/twilio-sandbox-setup.md); live 2-phone run pending user setup.
 
 ## Verification evidence
 
-(appended per task)
+- T1: 7 tests RED to GREEN (signature validator + channel via httpx MockTransport).
+- T2: 7 tests RED to GREEN (inbound routing, 403 forged, unknown sender ignored, status update); FastAPI Depends wiring; router mounted.
+- T3: docs/twilio-sandbox-setup.md + backend/env.example with every spec section 12 variable.
+- Full suite: 203 passed; ruff + mypy strict clean.
+
+## Commits
+
+- 1f84ce2 feat(backend): Twilio WhatsApp channel with signature-validated webhooks, status callbacks and sandbox setup guide (TDD)
 
 ## Commits
 
