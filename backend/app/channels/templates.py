@@ -35,6 +35,9 @@ _TEMPLATES: dict[str, str] = {
         "Vale {employee_name}, veo varios turnos hoy: {shift_list}. ¿De cuál te "
         "das de baja?"
     ),
+    "ask_clarification": (
+        "No te he entendido bien. ¿Me lo repites? Responde SÍ o NO."
+    ),
     "out_of_scope": (
         "Hola, soy el asistente de turnos de {location_name} y solo gestiono "
         "avisos de ausencia y coberturas. Para cualquier otra cosa, contacta "

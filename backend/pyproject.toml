@@ -14,6 +14,7 @@ dependencies = [
     "celery[redis]>=5.4",
     "redis>=5.0",
     "tzdata>=2026.4",
+    "strands-agents==1.56.0",
 ]
 
 [dependency-groups]

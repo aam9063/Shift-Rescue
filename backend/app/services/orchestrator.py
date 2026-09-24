@@ -15,6 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.interpreter import MessageInterpreter
+from app.agent.llm import CircuitOpenError
 from app.channels.templates import render
 from app.core.clock import Clock
 from app.db.models import (
@@ -64,6 +66,7 @@ class RescueOrchestrator:
         scheduler: Scheduler,
         clock: Clock,
         config: OrchestratorConfig | None = None,
+        interpreter: MessageInterpreter | None = None,
     ) -> None:
         self._sessions = session_factory
         self._workforce = workforce
@@ -71,6 +74,7 @@ class RescueOrchestrator:
         self._scheduler = scheduler
         self._clock = clock
         self._config = config or OrchestratorConfig()
+        self.interpreter = interpreter
 
     # --- inbound -------------------------------------------------------------
 
@@ -86,6 +90,20 @@ class RescueOrchestrator:
         )
         if not persisted:
             return  # duplicate provider message: processed once (spec §7.4)
+
+        if self.interpreter is not None:
+            try:
+                llm_context = {
+                    "rescue_id": None,
+                    "pending_offers": await self._pending_offer_ids(employee_id),
+                }
+                interpreted = await self.interpreter.interpret(text, llm_context)
+            except CircuitOpenError:
+                interpreted = None
+
+            if interpreted is not None:
+                await self._route_interpreted(conversation_id, employee_id, interpreted)
+                return
 
         parsed = parse_message(text)
         if parsed.intent == Intent.ABSENCE_REPORT:
@@ -110,6 +128,147 @@ class RescueOrchestrator:
         else:
             # DECLINE/UNCLEAR/RETRACT without context: brief redirect (spec §5.5).
             await self._send_out_of_scope(conversation_id, employee_id)
+
+    async def _route_interpreted(
+        self, conversation_id: str, employee_id: str, interpreted: Any
+    ) -> None:
+        intent = interpreted.intent
+        if intent == "ABSENCE_REPORT":
+            await self._handle_absence_report(conversation_id, employee_id)
+        elif intent == "ABSENCE_CONFIRM":
+            await self._handle_confirmation(conversation_id, employee_id)
+        elif intent == "OFFER_ACCEPT":
+            if not await self._try_accept_offer(employee_id):
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif intent == "OFFER_DECLINE":
+            if not await self._try_decline_offer(employee_id):
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif intent == "OFFER_WITHDRAW":
+            if not await self._try_withdraw(employee_id):
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif intent == "ABSENCE_RETRACT":
+            if not await self._handle_retraction(employee_id):
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif intent == "OFFER_CONDITIONAL":
+            if not await self._accept_with_conditions(
+                employee_id,
+                interpreted.proposed_start,
+                interpreted.proposed_end,
+            ):
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif intent == "QUESTION":
+            employee = await self._employee(employee_id)
+            if employee is not None:
+                await self._send_template(
+                    to=self._phone_of(employee),
+                    template_key="ask_clarification",
+                )
+        elif intent == "UNCLEAR":
+            await self._clarify_once(conversation_id, employee_id)
+        else:  # SMALLTALK and anything unexpected
+            await self._send_out_of_scope(conversation_id, employee_id)
+
+    async def _clarify_once(self, conversation_id: str, employee_id: str) -> None:
+        """A single clarification per conversation, then a polite redirect (§5.5)."""
+        async with self._sessions() as session:
+            asked = (
+                await session.execute(
+                    select(Message).where(
+                        Message.conversation_id == conversation_id,
+                        Message.template_key == "ask_clarification",
+                    )
+                )
+            ).scalars().first()
+            already = asked is not None
+        if already:
+            await self._send_out_of_scope(conversation_id, employee_id)
+            return
+        employee = await self._employee(employee_id)
+        if employee is None:
+            return
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key="ask_clarification",
+            conversation_id=conversation_id,
+        )
+
+    async def _accept_with_conditions(
+        self,
+        employee_id: str,
+        proposed_start: str | None,
+        proposed_end: str | None,
+    ) -> bool:
+        """Conditional acceptance: always manager approval (spec §2.1)."""
+        now = self._clock.now()
+        async with self._sessions() as session:
+            offer = (
+                await session.execute(
+                    select(Offer)
+                    .where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                    .order_by(Offer.sent_at.desc())
+                )
+            ).scalars().first()
+            if offer is None:
+                return False
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == offer.rescue_id).with_for_update()
+                )
+            ).scalar_one()
+            if case.status != State.OFFERING.value:
+                return False
+
+            result = transition(State.OFFERING, StateMachineEvent.CONDITIONAL_ACCEPT)
+            case.status = result.new_state.value
+            offer.proposed_start = (
+                datetime.fromisoformat(proposed_start) if proposed_start else None
+            )
+            offer.proposed_end = (
+                datetime.fromisoformat(proposed_end) if proposed_end else None
+            )
+            offer.requires_approval = True
+            session.add(
+                ApprovalRequest(
+                    id=f"appr_cond_{offer.id}",
+                    rescue_id=case.id,
+                    offer_id=offer.id,
+                    kind="partial_coverage",
+                    status="pending",
+                )
+            )
+            session.add(
+                AuditEvent(
+                    id=f"audit_{offer.id}_conditional_{int(now.timestamp())}",
+                    rescue_id=case.id,
+                    type="APPROVAL_REQUESTED",
+                    payload={"kind": "partial_coverage"},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+            self._scheduler.schedule(
+                _aware(case.deadline_at), "approval_timeout", {"case_id": case.id}
+            )
+
+        employee = await self._employee(employee_id)
+        manager = await self._manager_for(case.location_id)
+        if employee is not None and manager is not None:
+            await self._send_template(
+                to=self._phone_of(employee),
+                template_key="offer_pending_approval",
+                employee_name=employee["full_name"],
+                manager_name=manager["name"],
+            )
+        return True
+
+    async def _pending_offer_ids(self, employee_id: str) -> list[str]:
+        async with self._sessions() as session:
+            offers = (
+                await session.execute(
+                    select(Offer).where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                )
+            ).scalars()
+            return [o.id for o in offers]
 
     async def _persist_inbound(
         self,
@@ -1223,12 +1382,38 @@ class RescueOrchestrator:
                     }
             return None
 
-    async def _send_template(self, to: str, template_key: str, **params: Any) -> None:
-        await self._channel.send(
+    async def _send_template(
+        self,
+        to: str,
+        template_key: str,
+        *,
+        conversation_id: str | None = None,
+        rescue_id: str | None = None,
+        **params: Any,
+    ) -> None:
+        body = render(template_key, **params)
+        provider_id = await self._channel.send(
             recipient_phone_e164=to,
-            body=render(template_key, **params),
+            body=body,
             template_key=template_key,
+            rescue_id=rescue_id,
         )
+        if conversation_id is None:
+            return
+        async with self._sessions() as session:
+            session.add(
+                Message(
+                    id=f"msg_out_{template_key}_{provider_id}",
+                    conversation_id=conversation_id,
+                    direction="outbound",
+                    provider_message_id=provider_id,
+                    body_redacted=body,
+                    template_key=template_key,
+                    delivery_status="sent",
+                    rescue_id=rescue_id,
+                )
+            )
+            await session.commit()
 
     async def _send_out_of_scope(self, conversation_id: str, employee_id: str) -> None:
         employee = await self._employee(employee_id)
