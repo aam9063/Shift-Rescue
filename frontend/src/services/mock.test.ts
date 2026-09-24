@@ -45,4 +45,34 @@ describe('MockDashboardDataSource', () => {
     const source = new MockDashboardDataSource()
     await expect(source.getRescueDetail('unknown')).rejects.toThrow()
   })
+
+  it('returns pending approvals with context', async () => {
+    const source = new MockDashboardDataSource()
+    const approvals = await source.getPendingApprovals()
+    expect(approvals.length).toBeGreaterThan(0)
+    expect(approvals.every((a) => a.status === 'pending')).toBe(true)
+    expect(approvals.every((a) => a.context.employeeName.length > 0)).toBe(true)
+  })
+
+  it('decides an approval and removes it from the pending inbox', async () => {
+    const source = new MockDashboardDataSource()
+    const [first] = await source.getPendingApprovals()
+    await source.decideApproval(first.id, 'approved', 'manager_01')
+    const pending = await source.getPendingApprovals()
+    expect(pending.find((a) => a.id === first.id)).toBeUndefined()
+  })
+
+  it('rejecting an approval also removes it from the pending inbox', async () => {
+    const source = new MockDashboardDataSource()
+    const approvals = await source.getPendingApprovals()
+    const last = approvals[approvals.length - 1]
+    await source.decideApproval(last.id, 'rejected', 'manager_01')
+    const pending = await source.getPendingApprovals()
+    expect(pending.find((a) => a.id === last.id)).toBeUndefined()
+  })
+
+  it('throws when deciding an unknown approval', async () => {
+    const source = new MockDashboardDataSource()
+    await expect(source.decideApproval('unknown', 'approved', 'manager_01')).rejects.toThrow()
+  })
 })

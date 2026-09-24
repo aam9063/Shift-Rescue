@@ -1,4 +1,4 @@
-import type { RescueCase, RescueDetail, Shift } from '../domain/types'
+import type { ApprovalRequest, ApprovalStatus, RescueCase, RescueDetail, Shift } from '../domain/types'
 
 /**
  * Data source abstraction for the dashboard. Today it is satisfied by mock
@@ -10,6 +10,8 @@ export interface DashboardDataSource {
   getShifts(dayIso: string): Promise<Shift[]>
   getActiveRescues(): Promise<RescueCase[]>
   getRescueDetail(rescueId: string): Promise<RescueDetail>
+  getPendingApprovals(): Promise<ApprovalRequest[]>
+  decideApproval(id: string, decision: Exclude<ApprovalStatus, 'pending' | 'expired'>, decidedBy: string): Promise<void>
 }
 
 const LOCATION_ID = 'la-terraza-del-puerto'
@@ -34,6 +36,33 @@ const mockRescues: RescueCase[] = [
     status: 'OFFERING',
     // Opened 06:40, deadline fell before start - 30min, so opened_at + 10 min (spec §5.3).
     deadlineAt: '2026-10-03T06:50:00+02:00',
+  },
+]
+
+const mockApprovals: ApprovalRequest[] = [
+  {
+    id: 'appr_001',
+    rescueId: 'rescue_001',
+    kind: 'overtime',
+    status: 'pending',
+    requestedAt: '2026-10-03T06:41:30+02:00',
+    context: {
+      employeeName: 'Bruno T.',
+      shiftTime: '07:00 – 15:00',
+      detail: 'Covering would exceed contracted 30h weekly hours',
+    },
+  },
+  {
+    id: 'appr_002',
+    rescueId: 'rescue_001',
+    kind: 'partial_coverage',
+    status: 'pending',
+    requestedAt: '2026-10-03T06:43:00+02:00',
+    context: {
+      employeeName: 'Iván M.',
+      shiftTime: '07:00 – 15:00',
+      detail: 'Proposed start 07:15 instead of 07:00',
+    },
   },
 ]
 
@@ -62,6 +91,24 @@ export class MockDashboardDataSource implements DashboardDataSource {
       candidates: rescueCandidates,
       offers: rescueOffers(rescueId),
     }
+  }
+
+  async getPendingApprovals(): Promise<ApprovalRequest[]> {
+    return mockApprovals.filter((a) => a.status === 'pending')
+  }
+
+  async decideApproval(
+    id: string,
+    decision: Exclude<ApprovalStatus, 'pending' | 'expired'>,
+    decidedBy: string,
+  ): Promise<void> {
+    const approval = mockApprovals.find((a) => a.id === id)
+    if (!approval) {
+      throw new Error(`Unknown approval: ${id}`)
+    }
+    approval.status = decision
+    approval.decidedBy = decidedBy
+    approval.decidedAt = '2026-10-03T06:46:00+02:00'
   }
 }
 
