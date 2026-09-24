@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
+from app.api.webhooks_twilio import router as twilio_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -13,4 +14,5 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Shift Rescue API", docs_url="/docs")
     app.include_router(health_router)
+    app.include_router(twilio_router)
     return app
