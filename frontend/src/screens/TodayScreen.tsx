@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
+import { ActiveRescueBanner } from '../components/ActiveRescueBanner'
 import { formatShiftTime, groupShiftsByRole } from '../domain/today'
 import { RoleOrder, type Shift, type ShiftRole, type ShiftStatus } from '../domain/types'
-import { useTodayShifts } from '../services/hooks'
+import { useActiveRescues, useTodayShifts } from '../services/hooks'
 
 const TIMEZONE = 'Europe/Madrid'
 
@@ -71,29 +72,31 @@ export interface TodayScreenProps {
 export function TodayScreen({ now = new Date() }: TodayScreenProps) {
   const dayIso = now.toISOString().slice(0, 10)
   const { shifts, isLoading } = useTodayShifts(dayIso)
-
-  if (isLoading) {
-    return <p className="text-base text-text-secondary">Loading…</p>
-  }
-
-  if (!shifts || shifts.length === 0) {
-    return <p className="text-base text-text-secondary">No shifts scheduled for today</p>
-  }
-
-  const groups = groupShiftsByRole(shifts, RoleOrder)
+  const { rescues } = useActiveRescues()
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold leading-9 tracking-tight text-green-starbucks">
         Today
       </h1>
-      {groups.map((group) => (
-        <Section key={group.role} title={roleLabels[group.role]}>
-          {group.shifts.map((shift) => (
-            <ShiftCard key={shift.id} shift={shift} />
+      {isLoading ? (
+        <p className="text-base text-text-secondary">Loading…</p>
+      ) : !shifts || shifts.length === 0 ? (
+        <p className="text-base text-text-secondary">No shifts scheduled for today</p>
+      ) : (
+        <>
+          {rescues?.map((rescue) => (
+            <ActiveRescueBanner key={rescue.id} rescue={rescue} now={now} />
           ))}
-        </Section>
-      ))}
+          {groupShiftsByRole(shifts, RoleOrder).map((group) => (
+            <Section key={group.role} title={roleLabels[group.role]}>
+              {group.shifts.map((shift) => (
+                <ShiftCard key={shift.id} shift={shift} />
+              ))}
+            </Section>
+          ))}
+        </>
+      )}
     </div>
   )
 }

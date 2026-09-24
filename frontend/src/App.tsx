@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Button } from './components/ui/Button'
+import { TodayScreen } from './screens/TodayScreen'
 
 const queryClient = new QueryClient()
 
 /**
  * Themed app shell for the Shift Rescue manager dashboard.
  * Canvas, greens, typography and elevation follow DESIGN.md.
- * Dashboard screens arrive with the `manager-dashboard` feature.
  */
 function Shell() {
   return (
@@ -24,18 +24,7 @@ function Shell() {
         </nav>
       </header>
       <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-6">
-        <h1 className="text-2xl font-semibold leading-9 tracking-tight text-green-starbucks">
-          Today
-        </h1>
-        <p className="mt-2 text-base tracking-tight text-text-secondary">
-          Shift coverage dashboard — screens arrive with the manager-dashboard feature.
-        </p>
-        <section className="mt-6 rounded-card bg-surface p-6 shadow-card">
-          <h2 className="text-xl font-medium tracking-tight">Shifts</h2>
-          <p className="mt-2 text-sm tracking-tight text-text-secondary">
-            Today&apos;s shifts by role, active rescues and coverage countdown will live here.
-          </p>
-        </section>
+        <TodayScreen />
       </main>
     </div>
   )

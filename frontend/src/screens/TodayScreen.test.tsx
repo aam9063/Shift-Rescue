@@ -35,6 +35,13 @@ describe('TodayScreen', () => {
     expect(await screen.findByText('No shifts scheduled for today')).toBeInTheDocument()
   })
 
+  it('highlights active rescues with their countdown above the shift list', async () => {
+    renderWithProviders(<TodayScreen now={NOW} />)
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('Lucía F.')
+    expect(banner).toHaveTextContent('5m left')
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
