@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
-import type { RescueCase, RescueDetail, Shift } from '../domain/types'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ApprovalRequest, RescueCase, RescueDetail, Shift } from '../domain/types'
 import { MockDashboardDataSource, type DashboardDataSource } from './mock'
 
 /**
@@ -30,4 +30,29 @@ export function useRescueDetail(rescueId: string): { detail: RescueDetail | unde
     queryFn: () => dataSource.getRescueDetail(rescueId),
   })
   return { detail: query.data, isLoading: query.isLoading }
+}
+
+export function usePendingApprovals(): { approvals: ApprovalRequest[] | undefined; isLoading: boolean } {
+  const query = useQuery({
+    queryKey: ['approvals', 'pending'],
+    queryFn: () => dataSource.getPendingApprovals(),
+  })
+  return { approvals: query.data, isLoading: query.isLoading }
+}
+
+export function useDecideApproval(): {
+  decide: (id: string, decision: 'approved' | 'rejected') => void
+  isPending: boolean
+} {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
+      dataSource.decideApproval(id, decision, 'manager_01'),
+    onSuccess: () => {
+      // The decision also affects the rescue detail (approval timeline).
+      void queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+    },
+  })
+  return { decide: (id, decision) => mutation.mutate({ id, decision }), isPending: mutation.isPending }
 }

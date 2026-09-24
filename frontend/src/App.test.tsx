@@ -20,6 +20,16 @@ describe('App shell (DESIGN.md themed)', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Today')
   })
 
+  it('navigates between Today and Approvals from the header', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<App />)
+    await screen.findByRole('heading', { level: 1, name: 'Today' })
+    await user.click(screen.getByRole('button', { name: 'Approvals' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Approvals' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Today' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Today' })).toBeInTheDocument()
+  })
+
   it('navigates from the rescue banner to the rescue detail and back', async () => {
     const user = userEvent.setup()
     renderWithProviders(<App />)

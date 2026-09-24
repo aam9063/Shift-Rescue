@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Button } from './components/ui/Button'
 import { RescueDetailScreen } from './screens/RescueDetailScreen'
+import { ApprovalsScreen } from './screens/ApprovalsScreen'
 import { TodayScreen } from './screens/TodayScreen'
 
 const queryClient = new QueryClient()
@@ -13,6 +14,7 @@ const queryClient = new QueryClient()
  * number of screens justifies it.
  */
 function Shell() {
+  const [view, setView] = useState<'today' | 'approvals'>('today')
   const [selectedRescueId, setSelectedRescueId] = useState<string | null>(null)
 
   return (
@@ -25,16 +27,31 @@ function Shell() {
           Shift Rescue
         </span>
         <nav className="flex items-center gap-2">
-          <Button variant="secondary">Sign in</Button>
-          <Button variant="dark">Join now</Button>
+          <Button
+            variant={view === 'today' ? 'dark' : 'secondary'}
+            onClick={() => setView('today')}
+          >
+            Today
+          </Button>
+          <Button
+            variant={view === 'approvals' ? 'dark' : 'secondary'}
+            onClick={() => setView('approvals')}
+          >
+            Approvals
+          </Button>
         </nav>
       </header>
       <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-6">
         {selectedRescueId ? (
           <RescueDetailScreen
             rescueId={selectedRescueId}
-            onBack={() => setSelectedRescueId(null)}
+            onBack={() => {
+              setSelectedRescueId(null)
+              setView('today')
+            }}
           />
+        ) : view === 'approvals' ? (
+          <ApprovalsScreen />
         ) : (
           <TodayScreen onOpenRescue={setSelectedRescueId} />
         )}
