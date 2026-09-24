@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.channels.templates import render
 from app.core.clock import Clock
 from app.db.models import (
+    ApprovalRequest,
     AuditEvent,
     Conversation,
     Employee,
@@ -27,8 +28,8 @@ from app.db.models import (
     RescueCase,
 )
 from app.domain.eligibility import evaluate_eligibility
+from app.domain.entities import EligibilityResult, RescueSettings
 from app.domain.entities import Employee as EmployeeEntity
-from app.domain.entities import RescueSettings
 from app.domain.parser import Intent, parse_message
 from app.domain.ranking import RankedCandidate, rank_candidates
 from app.domain.state_machine import SideEffect, State, StateMachineEvent, transition
@@ -87,7 +88,22 @@ class RescueOrchestrator:
         if parsed.intent == Intent.ABSENCE_REPORT:
             await self._handle_absence_report(conversation_id, employee_id)
         elif parsed.intent == Intent.CONFIRM:
-            await self._handle_confirmation(conversation_id, employee_id)
+            # Priority: absence confirmation (OPEN case), then offer acceptance,
+            # then covering withdrawal; otherwise a polite redirect.
+            if await self._has_open_case(employee_id):
+                await self._handle_confirmation(conversation_id, employee_id)
+            elif await self._try_accept_offer(employee_id) or await self._try_withdraw(employee_id):
+                pass
+            else:
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif parsed.intent == Intent.DECLINE:
+            if await self._try_decline_offer(employee_id) or await self._try_withdraw(employee_id):
+                pass
+            else:
+                await self._send_out_of_scope(conversation_id, employee_id)
+        elif parsed.intent == Intent.ABSENCE_RETRACT:
+            if not await self._handle_retraction(employee_id):
+                await self._send_out_of_scope(conversation_id, employee_id)
         else:
             # DECLINE/UNCLEAR/RETRACT without context: brief redirect (spec §5.5).
             await self._send_out_of_scope(conversation_id, employee_id)
@@ -384,6 +400,475 @@ class RescueOrchestrator:
             sent += 1
         return sent
 
+    # --- offer acceptance and decisions ---------------------------------------
+
+    async def _has_open_case(self, employee_id: str) -> bool:
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.status == State.OPEN.value,
+                    )
+                )
+            ).scalars().first()
+            return case is not None
+
+    async def _try_accept_offer(self, employee_id: str) -> bool:
+        now = self._clock.now()
+        async with self._sessions() as session:
+            offer = (
+                await session.execute(
+                    select(Offer)
+                    .where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                    .order_by(Offer.sent_at.desc())
+                )
+            ).scalars().first()
+            if offer is None:
+                # The rescue may have been covered by someone else while this
+                # candidate's offer was cancelled: friendly close-out (§5.5).
+                losing = (
+                    await session.execute(
+                        select(Offer)
+                        .where(Offer.employee_id == employee_id)
+                        .order_by(Offer.sent_at.desc())
+                    )
+                ).scalars().first()
+                if losing is not None:
+                    case_check = (
+                        await session.execute(
+                            select(RescueCase).where(RescueCase.id == losing.rescue_id)
+                        )
+                    ).scalar_one_or_none()
+                    if case_check is not None and case_check.status == State.COVERED.value:
+                        await self._reply_already_covered(employee_id)
+                        return True
+                return False
+
+            # Row lock on the case serializes concurrent acceptances (spec §7.4).
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == offer.rescue_id).with_for_update()
+                )
+            ).scalar_one()
+
+            if _utc(_aware(offer.expires_at)) < _utc(now):
+                offer.status = "EXPIRED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer.id}_expired",
+                        rescue_id=case.id,
+                        type="OFFER_EXPIRED",
+                        payload={},
+                        actor="system",
+                    )
+                )
+                await session.commit()
+                await self._reply_already_covered(employee_id)
+                return True
+
+            shift = await self._workforce.get_shift(case.shift_id)
+            if shift is None:
+                return False
+
+            # Revalidate eligibility before assigning (spec §2.6, invariant 2).
+            revalidation = await self._revalidate(case.location_id, shift, employee_id, now)
+            if not revalidation.eligible:
+                offer.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer.id}_revalidated",
+                        rescue_id=case.id,
+                        type="OFFER_REVALIDATION_FAILED",
+                        payload={"reasons": [r.code for r in revalidation.reasons]},
+                        actor="system",
+                    )
+                )
+                await session.commit()
+                await self._reply_already_covered(employee_id)
+                return True
+
+            if offer.requires_approval:
+                result = transition(
+                    State(case.status), StateMachineEvent.CONDITIONAL_ACCEPT
+                )
+                case.status = result.new_state.value
+                session.add(
+                    ApprovalRequest(
+                        id=f"appr_{offer.id}",
+                        rescue_id=case.id,
+                        offer_id=offer.id,
+                        kind="overtime",
+                        status="pending",
+                    )
+                )
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer.id}_approval_req",
+                        rescue_id=case.id,
+                        type="APPROVAL_REQUESTED",
+                        payload={"kind": "overtime"},
+                        actor="system",
+                    )
+                )
+                manager = await self._manager_for(case.location_id)
+                location_name, location_tz = await self._location_info(case.location_id)
+                await session.commit()
+
+                employee = await self._employee(employee_id)
+                if employee is not None and manager is not None:
+                    await self._send_template(
+                        to=self._phone_of(employee),
+                        template_key="offer_pending_approval",
+                        employee_name=employee["full_name"],
+                        manager_name=manager["name"],
+                    )
+                return True
+
+            # Unconditional accept: COVERED (invariant 1: one winner, locked row).
+            result = transition(State(case.status), StateMachineEvent.UNCONDITIONAL_ACCEPT)
+            case.status = result.new_state.value
+            case.covering_employee_id = employee_id
+            case.closed_at = now
+            case.resolution = "covered"
+            offer.status = "ACCEPTED"
+            offer.responded_at = now
+            await self._cancel_other_offers(session, case.id, offer.id)
+            session.add(
+                AuditEvent(
+                    id=f"audit_{offer.id}_accepted",
+                    rescue_id=case.id,
+                    type="OFFER_ACCEPTED",
+                    payload={"employee_id": employee_id},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+
+        # Effects after commit (spec §4.2).
+        await self._workforce.assign_shift(case.shift_id, employee_id)
+        employee = await self._employee(employee_id)
+        if employee is not None:
+            location_name, location_tz = await self._location_info(case.location_id)
+            await self._send_template(
+                to=self._phone_of(employee),
+                template_key="offer_confirmed",
+                employee_name=employee["full_name"],
+                start=self._fmt(shift.starts_at, location_tz),
+                end=self._fmt(shift.ends_at, location_tz),
+            )
+        manager = await self._manager_for(case.location_id)
+        if manager is not None and manager.get("phone_e164"):
+            await self._send_template(
+                to=manager["phone_e164"],
+                template_key="manager_covered",
+                employee_name=await self._employee_name(employee_id),
+                role=self._role_label(shift.role),
+                start=self._fmt(shift.starts_at, location_tz),
+                end=self._fmt(shift.ends_at, location_tz),
+            )
+        return True
+
+    async def _reply_already_covered(self, employee_id: str) -> None:
+        employee = await self._employee(employee_id)
+        if employee is None:
+            return
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key="offer_already_covered",
+            employee_name=employee["full_name"],
+        )
+
+    async def _cancel_other_offers(
+        self, session: AsyncSession, rescue_id: str, keep_offer_id: str
+    ) -> None:
+        pending = (
+            await session.execute(
+                select(Offer).where(
+                    Offer.rescue_id == rescue_id,
+                    Offer.status == "PENDING",
+                    Offer.id != keep_offer_id,
+                )
+            )
+        ).scalars()
+        for offer in pending:
+            offer.status = "CANCELLED"
+
+    async def _revalidate(
+        self, location_id: str, shift: Any, employee_id: str, now: datetime
+    ) -> EligibilityResult:
+        employees = await self._workforce.list_employees(location_id)
+        employee_entities = [
+            EmployeeEntity(
+                id=e["id"],
+                roles=list(e["roles"]),
+                contract_weekly_hours=e["contract_weekly_hours"],
+                max_weekly_hours=e["max_weekly_hours"],
+                home_zone=e["home_zone"],
+                accepts_extra_shifts=e["accepts_extra_shifts"],
+                active=e["active"],
+            )
+            for e in employees
+        ]
+        schedule = await self._workforce.get_schedule(
+            location_id, now - timedelta(days=LOOKBACK_DAYS), shift.ends_at + timedelta(days=1)
+        )
+        blocks = await self._workforce.list_availability_blocks(
+            location_id, now - timedelta(days=LOOKBACK_DAYS), shift.ends_at + timedelta(days=1)
+        )
+        coverage_counts = await self._coverage_counts(now)
+        results = evaluate_eligibility(
+            shift,
+            employee_entities,
+            schedule,
+            blocks,
+            coverage_counts,
+            RescueSettings(),
+            now,
+        )
+        result = next(r for r in results if r.employee_id == employee_id)
+        return result
+
+    async def _try_decline_offer(self, employee_id: str) -> bool:
+        now = self._clock.now()
+        async with self._sessions() as session:
+            offer = (
+                await session.execute(
+                    select(Offer)
+                    .where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                    .order_by(Offer.sent_at.desc())
+                )
+            ).scalars().first()
+            if offer is None:
+                return False
+            offer.status = "DECLINED"
+            offer.responded_at = now
+            session.add(
+                AuditEvent(
+                    id=f"audit_{offer.id}_declined",
+                    rescue_id=offer.rescue_id,
+                    type="OFFER_DECLINED",
+                    payload={},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+            return True
+
+    async def _try_withdraw(self, employee_id: str) -> bool:
+        now = self._clock.now()
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(
+                        RescueCase.covering_employee_id == employee_id,
+                        RescueCase.status == State.COVERED.value,
+                    )
+                )
+            ).scalars().first()
+            if case is None:
+                return False
+            result = transition(State.COVERED, StateMachineEvent.COVERING_WITHDREW)
+            case.status = result.new_state.value
+            case.covering_employee_id = None
+            case.closed_at = None
+            case.resolution = None
+            session.add(
+                AuditEvent(
+                    id=f"audit_{case.id}_withdrew_{int(now.timestamp())}",
+                    rescue_id=case.id,
+                    type="COVERING_WITHDREW",
+                    payload={},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+
+        await self._workforce.unassign_shift(case.shift_id)
+        manager = await self._manager_for(case.location_id)
+        if manager is not None and manager.get("phone_e164"):
+            await self._send_template(
+                to=manager["phone_e164"],
+                template_key="manager_covered",
+                employee_name=await self._employee_name(employee_id),
+                role="—",
+                start="—",
+                end="—",
+            )
+        return True
+
+    async def _handle_retraction(self, employee_id: str) -> bool:
+        now = self._clock.now()
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.status.in_(
+                            [State.OFFERING.value, State.AWAITING_APPROVAL.value]
+                        ),
+                    )
+                )
+            ).scalars().first()
+            if case is None:
+                return False
+            session.add(
+                ApprovalRequest(
+                    id=f"appr_cancel_{case.id}_{int(now.timestamp())}",
+                    rescue_id=case.id,
+                    offer_id=None,
+                    kind="cancel_rescue",
+                    status="pending",
+                )
+            )
+            session.add(
+                AuditEvent(
+                    id=f"audit_{case.id}_cancel_req_{int(now.timestamp())}",
+                    rescue_id=case.id,
+                    type="APPROVAL_REQUESTED",
+                    payload={"kind": "cancel_rescue"},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+
+        manager = await self._manager_for(case.location_id)
+        if manager is not None and manager.get("phone_e164"):
+            shift = await self._workforce.get_shift(case.shift_id)
+            location_name, location_tz = await self._location_info(case.location_id)
+            await self._send_template(
+                to=manager["phone_e164"],
+                template_key="manager_cancel_requested",
+                employee_name=await self._employee_name(employee_id),
+                role=self._role_label(shift.role) if shift else "—",
+                start=self._fmt(shift.starts_at, location_tz) if shift else "—",
+                end=self._fmt(shift.ends_at, location_tz) if shift else "—",
+            )
+        return True
+
+    async def decide_approval(self, approval_id: str, decision: str, decided_by: str) -> None:
+        """Manager decision on an approval request (spec §2.1: human decides)."""
+        now = self._clock.now()
+        async with self._sessions() as session:
+            approval = (
+                await session.execute(
+                    select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
+                )
+            ).scalar_one_or_none()
+            if approval is None or approval.status != "pending":
+                return
+            case = (
+                await session.execute(
+                    select(RescueCase)
+                    .where(RescueCase.id == approval.rescue_id)
+                    .with_for_update()
+                )
+            ).scalar_one()
+            state = State(case.status)
+
+            if decision == "rejected":
+                result = transition(state, StateMachineEvent.APPROVAL_REJECTED)
+                approval.status = "rejected"
+                offer = await self._offer(session, approval.offer_id)
+                if offer is not None:
+                    offer.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{approval.id}_decided",
+                        rescue_id=case.id,
+                        type="APPROVAL_DECIDED",
+                        payload={"decision": "rejected"},
+                        actor=f"manager:{decided_by}",
+                    )
+                )
+                case.status = result.new_state.value
+                await session.commit()
+                return
+
+            if approval.kind == "cancel_rescue":
+                result = transition(state, StateMachineEvent.APPROVAL_APPROVED_CANCEL)
+                case.status = result.new_state.value
+                case.closed_at = now
+                case.resolution = "cancelled"
+                approval.status = "approved"
+                approval.decided_by = decided_by
+                approval.decided_at = now
+                await self._supersede_offers(session, case.id)
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{approval.id}_decided",
+                        rescue_id=case.id,
+                        type="APPROVAL_DECIDED",
+                        payload={"decision": "approved", "kind": "cancel_rescue"},
+                        actor=f"manager:{decided_by}",
+                    )
+                )
+                await session.commit()
+                return
+
+            if approval.kind == "partial_coverage":
+                result = transition(state, StateMachineEvent.APPROVAL_APPROVED_PARTIAL)
+                case.status = result.new_state.value
+                case.resolution = "partially_covered"
+            else:  # overtime
+                result = transition(state, StateMachineEvent.APPROVAL_APPROVED)
+                case.status = result.new_state.value
+                case.resolution = "covered"
+
+            approval.status = "approved"
+            approval.decided_by = decided_by
+            approval.decided_at = now
+            offer = await self._offer(session, approval.offer_id)
+            if offer is not None:
+                offer.status = "ACCEPTED"
+                offer.responded_at = now
+                case.covering_employee_id = offer.employee_id
+                case.closed_at = now
+                await self._cancel_other_offers(session, case.id, offer.id)
+            session.add(
+                AuditEvent(
+                    id=f"audit_{approval.id}_decided",
+                    rescue_id=case.id,
+                    type="APPROVAL_DECIDED",
+                    payload={"decision": "approved", "kind": approval.kind},
+                    actor=f"manager:{decided_by}",
+                )
+            )
+            await session.commit()
+
+        # Effects after commit.
+        if offer is not None and offer.employee_id:
+            await self._workforce.assign_shift(case.shift_id, offer.employee_id)
+            employee = await self._employee(offer.employee_id)
+            confirmed_shift = await self._workforce.get_shift(case.shift_id)
+            if employee is not None and confirmed_shift is not None:
+                location_name, location_tz = await self._location_info(case.location_id)
+                await self._send_template(
+                    to=self._phone_of(employee),
+                    template_key="offer_confirmed",
+                    employee_name=employee["full_name"],
+                    start=self._fmt(confirmed_shift.starts_at, location_tz),
+                    end=self._fmt(confirmed_shift.ends_at, location_tz),
+                )
+
+    async def _offer(self, session: AsyncSession, offer_id: str | None) -> Offer | None:
+        if offer_id is None:
+            return None
+        return (
+            await session.execute(select(Offer).where(Offer.id == offer_id))
+        ).scalar_one_or_none()
+
+    async def _supersede_offers(self, session: AsyncSession, rescue_id: str) -> None:
+        pending = (
+            await session.execute(
+                select(Offer).where(
+                    Offer.rescue_id == rescue_id, Offer.status == "PENDING"
+                )
+            )
+        ).scalars()
+        for offer in pending:
+            offer.status = "SUPERSEDED"
+
     # --- helpers ---------------------------------------------------------------
 
     def _deadline_for(self, now: datetime, shift: Any) -> datetime:
@@ -486,8 +971,14 @@ class RescueOrchestrator:
 
 
 def _utc(moment: datetime) -> datetime:
-
     return moment.astimezone(UTC)
+
+
+def _aware(moment: datetime) -> datetime:
+    """SQLite drops tzinfo on storage; treat naive values as UTC."""
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment
 
 
 __all__ = ["OrchestratorConfig", "RescueOrchestrator", "SideEffect", "State"]

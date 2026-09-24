@@ -91,6 +91,10 @@ _TRANSITIONS: dict[tuple[State, StateMachineEvent], TransitionResult] = {
         State.AWAITING_APPROVAL,
         (SideEffect.CREATE_APPROVAL_REQUEST, SideEffect.NOTIFY_MANAGER),
     ),
+    (State.OFFERING, StateMachineEvent.APPROVAL_APPROVED_CANCEL): TransitionResult(
+        State.CANCELLED,
+        (SideEffect.SUPERSEDE_OFFERS, SideEffect.NOTIFY_MANAGER),
+    ),
     (State.OFFERING, StateMachineEvent.WAVES_EXHAUSTED): TransitionResult(
         State.ESCALATED,
         (SideEffect.NOTIFY_MANAGER,),

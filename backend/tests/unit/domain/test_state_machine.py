@@ -81,6 +81,11 @@ class TestLegalTransitions:
         assert new_state == State.AWAITING_APPROVAL
         assert SideEffect.NOTIFY_MANAGER in effects
 
+    def test_offering_cancel_rescue_cancels(self) -> None:
+        new_state, effects = t(State.OFFERING, StateMachineEvent.APPROVAL_APPROVED_CANCEL)
+        assert new_state == State.CANCELLED
+        assert SideEffect.SUPERSEDE_OFFERS in effects
+
     def test_awaiting_approval_cancel_rescue_cancels(self) -> None:
         new_state, effects = t(
             State.AWAITING_APPROVAL, StateMachineEvent.APPROVAL_APPROVED_CANCEL

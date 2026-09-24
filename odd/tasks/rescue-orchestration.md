@@ -52,7 +52,7 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 ## Tasks
 
 - [x] T1 — Deterministic parser (TDD).
-- [ ] T2 — Orchestrator: inbound handling, confirmation flow, case opening, first wave (TDD, sqlite).
+- [x] T2 — Orchestrator: inbound handling, confirmation flow, case opening, first wave (TDD, sqlite).
 - [ ] T3 — Acceptance resolution with row-lock revalidation + approval path (TDD).
 - [ ] T4 — Waves, timeouts and escalation via SimScheduler (TDD).
 - [ ] T5 — Quiet hours + manager location link migration (TDD).
@@ -61,6 +61,8 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 ## Verification evidence
 
 - T1: RED → GREEN. Parser: 30 tests (confirm/decline vocabulary incl. emoji and digits, absence phrasing with accent/case normalization, retraction, ambiguity → UNCLEAR never acts, health details never extracted). 112/112 suite, lint clean. Commit `c1f685a`.
+- T2: RED → GREEN 6 orchestrator tests. New: `MockWorkforceAdapter` (SQLAlchemy-backed, tz-normalizing), health redaction (`redact_if_health`), es-ES templates module, migration `0003` (`manager.location_ids`). Covered: report → OPEN case + absence_confirm (no manager notice, no offers yet); confirm → OFFERING + 3 offers wave 1 + HRIS absent + audit RESCUE_OPENED/OFFER_SENT + manager notified; duplicate provider_message_id processed once; two shifts → ask_which_shift; confirm without pending → out_of_scope; health text stored as `[redacted: health details]`. 118/118, mypy strict clean. Commit `a0fe30b`.
+  - Design note: OPEN state = "detected, awaiting explicit confirmation"; confirmation drives OPEN→OFFERING (spec: confirm before opening the rescue).
 
 ## Commits
 
@@ -68,4 +70,4 @@ Out of scope: LLM interpreter (`llm-interpreter`), Twilio, dashboard WebSocket p
 
 ## Progress / Next step
 
-T1 closed. Next: T2 — orchestrator core (inbound idempotency, confirmation flow, case opening → OFFERING with first wave).
+T1-T2 closed. Next: T3 — acceptance resolution with row-lock revalidation + approval path.
