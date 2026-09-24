@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.db.models import Offer, RescueCase
-from tests.unit.services.helpers import build_world, run_to_offering
+from tests.unit.services.helpers import MANAGER_PHONE, build_world, run_to_offering
 
 
 async def test_wave_expiry_triggers_next_wave() -> None:
@@ -141,5 +141,4 @@ async def test_late_acceptance_after_escalation_goes_to_approval() -> None:
         assert case.status == "AWAITING_APPROVAL"
         approval = (await session.execute(select(ApprovalRequest))).scalar_one()
         assert approval.status == "pending"
-    manager_noticed = [m for m in world.channel.to_manager()]
-    assert manager_noticed
+    assert world.channel.to(MANAGER_PHONE)

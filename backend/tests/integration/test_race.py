@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
+from app.channels.simulated import SimulatedChannel
 from app.core.clock import FakeClock
 from app.db.models import (
     AuditEvent,
@@ -26,7 +27,6 @@ from app.db.models import (
 from app.db.seed import DEMO_LOCATION_ID, DEMO_LOCATION_NAME, DEMO_MANAGER_EMAIL
 from app.integrations.workforce.mock import MockWorkforceAdapter
 from app.services.orchestrator import RescueOrchestrator
-from tests.unit.services.helpers import RecordingChannel
 
 pytestmark = [
     pytest.mark.integration,
@@ -121,7 +121,7 @@ class _World:
         self.session_factory = session_factory
         self.workforce = MockWorkforceAdapter(session_factory)
         self.clock = FakeClock(NOW)
-        self.channel = RecordingChannel()
+        self.channel = SimulatedChannel()
         self.scheduler = RecordingScheduler()
 
 

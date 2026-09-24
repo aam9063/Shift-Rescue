@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.interpreter import MessageInterpreter
+from app.agent.interpreter import MessageInterpreter, ProviderUnavailableError
 from app.agent.llm import CircuitOpenError
 from app.channels.templates import render
 from app.core.clock import Clock
@@ -85,6 +85,7 @@ class RescueOrchestrator:
         provider_message_id: str,
         text: str,
     ) -> None:
+        now = self._clock.now()
         persisted = await self._persist_inbound(
             conversation_id, employee_id, provider_message_id, text
         )
@@ -98,8 +99,8 @@ class RescueOrchestrator:
                     "pending_offers": await self._pending_offer_ids(employee_id),
                 }
                 interpreted = await self.interpreter.interpret(text, llm_context)
-            except CircuitOpenError:
-                interpreted = None
+            except (CircuitOpenError, ProviderUnavailableError):
+                interpreted = None  # degraded mode: deterministic parser (§9.3)
 
             if interpreted is not None:
                 await self._route_interpreted(conversation_id, employee_id, interpreted)
@@ -108,6 +109,14 @@ class RescueOrchestrator:
         parsed = parse_message(text)
         if parsed.intent == Intent.ABSENCE_REPORT:
             await self._handle_absence_report(conversation_id, employee_id)
+        elif parsed.intent == Intent.CONFIRM and (
+            parsed.proposed_start or parsed.proposed_end
+        ) and await self._has_pending_offer(employee_id):
+            # Degraded-mode conditional acceptance with extracted times (§5.5).
+            start_iso = self._to_iso(parsed.proposed_start, now)
+            end_iso = self._to_iso(parsed.proposed_end, now)
+            if not await self._accept_with_conditions(employee_id, start_iso, end_iso):
+                await self._send_out_of_scope(conversation_id, employee_id)
         elif parsed.intent == Intent.CONFIRM:
             # Priority: absence confirmation (OPEN case), then offer acceptance,
             # then covering withdrawal; otherwise a polite redirect.
@@ -199,7 +208,7 @@ class RescueOrchestrator:
         proposed_end: str | None,
     ) -> bool:
         """Conditional acceptance: always manager approval (spec §2.1)."""
-        now = self._clock.now()
+        self._clock.now()
         async with self._sessions() as session:
             offer = (
                 await session.execute(
@@ -238,7 +247,7 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=f"audit_{offer.id}_conditional_{int(now.timestamp())}",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="APPROVAL_REQUESTED",
                     payload={"kind": "partial_coverage"},
@@ -260,6 +269,23 @@ class RescueOrchestrator:
                 manager_name=manager["name"],
             )
         return True
+
+    async def _has_pending_offer(self, employee_id: str) -> bool:
+        async with self._sessions() as session:
+            offer = (
+                await session.execute(
+                    select(Offer).where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                )
+            ).scalars().first()
+            return offer is not None
+
+    def _to_iso(self, hhmm: str | None, now: datetime) -> str | None:
+        """Resolve a degraded-mode HH:MM onto the current date (UTC)."""
+        if not hhmm:
+            return None
+        hour, minute = hhmm.split(":")
+        base = _utc(now).replace(hour=int(hour), minute=int(minute))
+        return base.isoformat()
 
     async def _pending_offer_ids(self, employee_id: str) -> list[str]:
         async with self._sessions() as session:
@@ -361,7 +387,7 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=f"audit_{target.id}_{int(now.timestamp())}_{uuid4().hex[:8]}_reported",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=f"case_{target.id}_{int(now.timestamp())}",
                     type="ABSENCE_REPORTED",
                     payload={"shift_id": target.id},
@@ -380,6 +406,9 @@ class RescueOrchestrator:
         )
 
     async def _handle_confirmation(self, conversation_id: str, employee_id: str) -> None:
+        import os
+        if os.getenv("ORCH_DEBUG"):
+            print("DEBUG confirmation entered")
         now = self._clock.now()
         async with self._sessions() as session:
             case = (
@@ -393,14 +422,19 @@ class RescueOrchestrator:
                 )
             ).scalars().first()
             if case is None:
+                if os.getenv("ORCH_DEBUG"):
+                    print("DEBUG confirmation: no OPEN case found")
                 await self._send_out_of_scope(conversation_id, employee_id)
                 return
+
+            if os.getenv("ORCH_DEBUG"):
+                print("DEBUG confirmation: case found", case.id)
 
             result = transition(State.OPEN, StateMachineEvent.CANDIDATES_COMPUTED)
             case.status = result.new_state.value
             session.add(
                 AuditEvent(
-                    id=f"audit_{case.id}_opened_{int(now.timestamp())}_{uuid4().hex[:8]}",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="RESCUE_OPENED",
                     payload={},
@@ -427,6 +461,33 @@ class RescueOrchestrator:
                 location_tz=location_tz,
                 now=now,
             )
+            if os.getenv("ORCH_DEBUG"):
+                print("DEBUG confirmation: wave sent count", offered_count)
+
+            if offered_count == 0:
+                # No eligible candidates at all: escalate — unless the wave was
+                # queued by quiet hours (the deferred send owns it).
+                queued = (
+                    await session.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.rescue_id == case.id,
+                            AuditEvent.type == "OFFERS_QUEUED",
+                        )
+                    )
+                ).scalars().first()
+                if queued is None:
+                    await self._escalate(session, case, StateMachineEvent.WAVES_EXHAUSTED)
+                    await session.commit()
+                    manager = await self._manager_for(case.location_id)
+                    if manager is not None and manager.get("phone_e164"):
+                        await self._send_template(
+                            to=manager["phone_e164"],
+                            template_key="manager_escalated",
+                            role=self._role_label(shift.role),
+                            start=self._fmt(shift.starts_at, location_tz),
+                            end=self._fmt(shift.ends_at, location_tz),
+                        )
+                    return
 
             manager = await self._manager_for(case.location_id)
             if manager is not None and manager.get("phone_e164"):
@@ -518,7 +579,11 @@ class RescueOrchestrator:
         now: datetime,
     ) -> int:
         quiet_start, quiet_end = await self._quiet_hours(case.location_id)
-        if not offers_allowed(now, shift.starts_at, quiet_start, quiet_end):
+        # Quiet hours are wall-clock times in the location timezone (spec §5.3).
+        tz = ZoneInfo(location_tz) if location_tz else ZoneInfo("UTC")
+        now_local = _aware(now).astimezone(tz)
+        shift_local = _aware(shift.starts_at).astimezone(tz)
+        if not offers_allowed(now_local, shift_local, quiet_start, quiet_end):
             # Invariant 4: never send during quiet hours — defer to their end.
             deferred_at = next_quiet_end(now, quiet_end)
             self._scheduler.schedule(
@@ -562,10 +627,16 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=f"audit_{offer_id}_sent",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="OFFER_SENT",
-                    payload={"offer_id": offer_id, "wave": wave_number},
+                    payload={
+                        "offer_id": offer_id,
+                        "wave": wave_number,
+                        # Invariant-2 evidence: the eligibility snapshot at send time.
+                        "eligible": candidate.eligible,
+                        "requires_approval": candidate.requires_approval,
+                    },
                     actor="system",
                 )
             )
@@ -664,7 +735,7 @@ class RescueOrchestrator:
                 )
                 session.add(
                     AuditEvent(
-                        id=f"audit_{offer.id}_late",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="APPROVAL_REQUESTED",
                         payload={"reason": "late_acceptance"},
@@ -687,14 +758,14 @@ class RescueOrchestrator:
             if case.status != State.OFFERING.value:
                 # Lost the race: the winner cancelled this offer and covered
                 # the shift. Friendly close-out (invariant 1 + §5.5).
-                if offer.status == "PENDING":
+                if offer.status == "PENDING" and case.status == State.COVERED.value:
                     offer.status = "CANCELLED"
                 session.add(
                     AuditEvent(
-                        id=f"audit_{offer.id}_loser",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="OFFER_LOST_RACE",
-                        payload={},
+                        payload={"case_status": case.status},
                         actor=f"employee:{employee_id}",
                     )
                 )
@@ -706,7 +777,7 @@ class RescueOrchestrator:
                 offer.status = "EXPIRED"
                 session.add(
                     AuditEvent(
-                        id=f"audit_{offer.id}_expired",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="OFFER_EXPIRED",
                         payload={},
@@ -727,7 +798,7 @@ class RescueOrchestrator:
                 offer.status = "CANCELLED"
                 session.add(
                     AuditEvent(
-                        id=f"audit_{offer.id}_revalidated",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="OFFER_REVALIDATION_FAILED",
                         payload={"reasons": [r.code for r in revalidation.reasons]},
@@ -754,7 +825,7 @@ class RescueOrchestrator:
                 )
                 session.add(
                     AuditEvent(
-                        id=f"audit_{offer.id}_approval_req",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="APPROVAL_REQUESTED",
                         payload={"kind": "overtime"},
@@ -790,7 +861,7 @@ class RescueOrchestrator:
             await self._cancel_other_offers(session, case.id, offer.id)
             session.add(
                 AuditEvent(
-                    id=f"audit_{offer.id}_accepted",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="OFFER_ACCEPTED",
                     payload={"employee_id": employee_id},
@@ -799,8 +870,52 @@ class RescueOrchestrator:
             )
             await session.commit()
 
-        # Effects after commit (spec §4.2).
-        await self._workforce.assign_shift(case.shift_id, employee_id)
+        # Effects after commit (spec §4.2). HRIS failures retry 3 times,
+        # then the rescue escalates with a technical reason (spec §5.5).
+        assigned = False
+        for _attempt in range(3):
+            try:
+                await self._workforce.assign_shift(case.shift_id, employee_id)
+                assigned = True
+                break
+            except Exception:
+                continue
+        if not assigned:
+            async with self._sessions() as session:
+                failed_case = (
+                    await session.execute(
+                        select(RescueCase)
+                        .where(RescueCase.id == case.id)
+                        .with_for_update()
+                    )
+                ).scalar_one()
+                result = transition(State.COVERED, StateMachineEvent.TECHNICAL_FAILURE)
+                failed_case.status = result.new_state.value
+                failed_case.covering_employee_id = None
+                failed_case.closed_at = None
+                failed_case.resolution = None
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{uuid4().hex}",
+                        rescue_id=case.id,
+                        type="HRIS_FAILURE",
+                        payload={"reason": "assignment failed after retries"},
+                        actor="system",
+                    )
+                )
+                await session.commit()
+            manager = await self._manager_for(case.location_id)
+            location_name, location_tz = await self._location_info(case.location_id)
+            if manager is not None and manager.get("phone_e164"):
+                await self._send_template(
+                    to=manager["phone_e164"],
+                    template_key="manager_escalated",
+                    role=self._role_label(shift.role),
+                    start=self._fmt(shift.starts_at, location_tz),
+                    end=self._fmt(shift.ends_at, location_tz),
+                )
+            return True
+
         employee = await self._employee(employee_id)
         if employee is not None:
             location_name, location_tz = await self._location_info(case.location_id)
@@ -899,7 +1014,7 @@ class RescueOrchestrator:
             offer.responded_at = now
             session.add(
                 AuditEvent(
-                    id=f"audit_{offer.id}_declined",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=offer.rescue_id,
                     type="OFFER_DECLINED",
                     payload={},
@@ -910,7 +1025,7 @@ class RescueOrchestrator:
             return True
 
     async def _try_withdraw(self, employee_id: str) -> bool:
-        now = self._clock.now()
+        self._clock.now()
         async with self._sessions() as session:
             case = (
                 await session.execute(
@@ -929,7 +1044,7 @@ class RescueOrchestrator:
             case.resolution = None
             session.add(
                 AuditEvent(
-                    id=f"audit_{case.id}_withdrew_{int(now.timestamp())}",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="COVERING_WITHDREW",
                     payload={},
@@ -949,7 +1064,55 @@ class RescueOrchestrator:
                 start="—",
                 end="—",
             )
+
+        # Spec §5.5: the rescue reopens with new waves.
+        await self._resume_offering(case)
         return True
+
+    async def _resume_offering(self, case: RescueCase) -> None:
+        now = self._clock.now()
+        async with self._sessions() as session:
+            shift = await self._workforce.get_shift(case.shift_id)
+            if shift is None:
+                return
+            ranked = await self._compute_candidates(case.location_id, shift, now)
+            offered_ids = {
+                o.employee_id
+                for o in (
+                    await session.execute(select(Offer).where(Offer.rescue_id == case.id))
+                ).scalars()
+            }
+            next_candidates = [c for c in ranked if c.employee_id not in offered_ids]
+            if not next_candidates:
+                await self._escalate(session, case, StateMachineEvent.WAVES_EXHAUSTED)
+                await session.commit()
+                await self._notify_escalation(case)
+                return
+
+            last_wave = (
+                await session.execute(
+                    select(Offer.wave_number).where(Offer.rescue_id == case.id)
+                )
+            ).scalars().all()
+            next_wave = max(last_wave) + 1
+            location_name, location_tz = await self._location_info(case.location_id)
+            sent = await self._send_wave_offers(
+                session,
+                case,
+                shift,
+                next_candidates,
+                wave_number=next_wave,
+                location_name=location_name,
+                location_tz=location_tz,
+                now=now,
+            )
+            await session.commit()
+        if sent:
+            self._scheduler.schedule(
+                now + timedelta(minutes=self._config.wave_interval_minutes),
+                "wave_timeout",
+                {"case_id": case.id},
+            )
 
     async def _handle_retraction(self, employee_id: str) -> bool:
         now = self._clock.now()
@@ -977,7 +1140,7 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=f"audit_{case.id}_cancel_req_{int(now.timestamp())}",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="APPROVAL_REQUESTED",
                     payload={"kind": "cancel_rescue"},
@@ -1028,7 +1191,7 @@ class RescueOrchestrator:
                     offer.status = "CANCELLED"
                 session.add(
                     AuditEvent(
-                        id=f"audit_{approval.id}_decided",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="APPROVAL_DECIDED",
                         payload={"decision": "rejected"},
@@ -1050,7 +1213,7 @@ class RescueOrchestrator:
                 await self._supersede_offers(session, case.id)
                 session.add(
                     AuditEvent(
-                        id=f"audit_{approval.id}_decided",
+                        id=f"audit_{uuid4().hex}",
                         rescue_id=case.id,
                         type="APPROVAL_DECIDED",
                         payload={"decision": "approved", "kind": "cancel_rescue"},
@@ -1081,7 +1244,7 @@ class RescueOrchestrator:
                 await self._cancel_other_offers(session, case.id, offer.id)
             session.add(
                 AuditEvent(
-                    id=f"audit_{approval.id}_decided",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="APPROVAL_DECIDED",
                     payload={"decision": "approved", "kind": approval.kind},
@@ -1232,7 +1395,7 @@ class RescueOrchestrator:
                 approval.status = "expired"
             session.add(
                 AuditEvent(
-                    id=f"audit_{case.id}_approval_timeout_{int(self._clock.now().timestamp())}",
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="APPROVAL_TIMEOUT",
                     payload={},
@@ -1321,11 +1484,14 @@ class RescueOrchestrator:
     # --- helpers ---------------------------------------------------------------
 
     def _deadline_for(self, now: datetime, shift: Any) -> datetime:
+        """Spec §5.3: start - 30 min, or opened + 10 min if that already passed."""
         by_start = _utc(shift.starts_at) - timedelta(
             minutes=self._config.deadline_minutes_before_start
         )
         by_opened = _utc(now) + timedelta(minutes=self._config.min_deadline_minutes)
-        return max(by_start, by_opened)  # never surrender without trying (spec §5.3)
+        if by_start > _utc(now):
+            return by_start
+        return by_opened
 
     async def _upcoming_shifts_of(self, employee_id: str, now: datetime) -> list:
         location_id = await self._location_of(employee_id)

@@ -1,10 +1,19 @@
-"""Health-detail detection and redaction (spec §10).
-
-Health content is redacted BEFORE persisting — it never reaches the manager,
-logs or traces (invariant 7, §5.4).
-"""
+"""Privacy helpers (spec §9.1, §10): phone masking for logs/traces and
+health-detail redaction BEFORE persistence (invariant 7, §5.4)."""
 
 import re
+
+_PHONE_PATTERN = re.compile(r"^(\+?)(\d{2})(\d+)(\d{2})$")
+
+
+def mask_phone(phone: str) -> str:
+    """'+34600000001' -> '+34*******01'; garbage passes through."""
+    match = _PHONE_PATTERN.match(phone.strip())
+    if not match:
+        return phone
+    plus, prefix, middle, last = match.groups()
+    return f"{plus}{prefix}{'*' * len(middle)}{last}"
+
 
 _HEALTH_PATTERNS = [
     r"\benferm\w*",

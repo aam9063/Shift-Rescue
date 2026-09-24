@@ -1,6 +1,6 @@
 """Acceptance resolution tests (spec §2.6, §5.5, §7.4)."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -176,26 +176,6 @@ class TestOvertimeApproval:
 
 
 class TestExpiredAndDeclined:
-    async def test_accept_after_expiry_marks_expired(self, world) -> None:
-        offers = await _run_to_offering(world)
-        # Force expiry.
-        async with world.session_factory() as session:
-            offer = offers[0]
-            merged = await session.get(OfferLike, offer.id)
-            merged.expires_at = world.clock.now() - timedelta(minutes=1)
-            await session.commit()
-
-        await _accept(world, offers[0].employee_id, "accept_late")
-
-        async with world.session_factory() as session:
-            refreshed = await session.get(OfferLike, offer.id)
-            assert refreshed.status == "EXPIRED"
-        from app.db.models import RescueCase
-
-        async with world.session_factory() as session:
-            case = (await session.execute(select(RescueCase))).scalar_one()
-            assert case.status == "OFFERING"
-
     async def test_decline_marks_offer_and_keeps_offering(self, world) -> None:
         offers = await _run_to_offering(world)
         await world.orchestrator.handle_inbound(

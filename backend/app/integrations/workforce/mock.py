@@ -15,9 +15,18 @@ from app.domain.entities import AvailabilityBlock, ShiftSlot
 from app.ports import WorkforceAdapter
 
 
+class HrisError(Exception):
+    """Simulated HRIS outage (spec §5.5: retries, then escalate)."""
+
+
 class MockWorkforceAdapter(WorkforceAdapter):
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+        self._pending_assign_failures = 0
+
+    def fail_next_assignments(self, count: int) -> None:
+        """Inject `count` consecutive assignment failures (eval scenarios)."""
+        self._pending_assign_failures = count
 
     async def list_employees(self, location_id: str) -> list[dict]:
         from app.db.models import Employee
@@ -84,6 +93,9 @@ class MockWorkforceAdapter(WorkforceAdapter):
     async def assign_shift(self, shift_id: str, employee_id: str) -> None:
         from app.db.models import Shift
 
+        if self._pending_assign_failures > 0:
+            self._pending_assign_failures -= 1
+            raise HrisError("simulated HRIS outage")
         async with self._session_factory() as session:
             row = (await session.execute(select(Shift).where(Shift.id == shift_id))).scalar_one()
             row.employee_id = employee_id

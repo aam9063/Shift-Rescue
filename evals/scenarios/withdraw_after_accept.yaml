@@ -1,0 +1,16 @@
+id: withdraw_after_accept
+description: Covering employee withdraws; rescue reopens and escalates.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "hoy no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 2
+      text: "si"
+    - after_minutes: 10
+      text: "perdon, al final no puedo"
+expect:
+  final_state: ESCALATED
+  invariants: all

@@ -1,0 +1,16 @@
+id: quick_coverage
+description: One candidate accepts in wave 1; shift covered fast.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "me encuentro fatal, hoy no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 2
+      text: "si"
+expect:
+  final_state: COVERED
+  covering_employee_in: [emp_02_floor]
+  templates_sent: [absence_confirm, offer, offer_confirmed]
+  invariants: all

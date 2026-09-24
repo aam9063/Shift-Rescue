@@ -75,3 +75,30 @@ def test_parser_never_sees_health_details_as_intent() -> None:
     parsed = parse_message("me encuentro fatal, migraña horrible, hoy no puedo ir")
     assert parsed.intent == Intent.ABSENCE_REPORT
     assert "migraña" not in repr(parsed.intent)
+
+class TestConditionalExtraction:
+    def test_quarter_past_seven(self) -> None:
+        parsed = parse_message("llego a las 7 y cuarto")
+        assert parsed.proposed_start == "07:15"
+
+    def test_half_past_six(self) -> None:
+        parsed = parse_message("llego a las 6 y media")
+        assert parsed.proposed_start == "06:30"
+
+    def test_range(self) -> None:
+        parsed = parse_message("puedo de 9 a 15 si")
+        assert parsed.proposed_start == "09:00"
+        assert parsed.proposed_end == "15:00"
+
+    def test_until(self) -> None:
+        parsed = parse_message("hasta mediodia puedo")
+        # "mediodía" is not numeric: stays UNCLEAR-ish without times
+        assert parsed.proposed_end is None
+
+    def test_afternoon_disambiguation(self) -> None:
+        parsed = parse_message("llego a las 7:15 de la tarde")
+        assert parsed.proposed_start == "19:15"
+
+    def test_from(self) -> None:
+        parsed = parse_message("puedo a partir de las 12")
+        assert parsed.proposed_start == "12:00"
