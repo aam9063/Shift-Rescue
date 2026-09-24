@@ -1,6 +1,6 @@
 # Feature: LLM interpreter (`llm-interpreter`)
 
-Status: **in progress**
+Status: **closed**
 Branch: `feature/llm-interpreter` (stacked on `feature/rescue-orchestration`)
 Created: 2026-09-24
 
@@ -51,37 +51,45 @@ evals-observability feature), real Twilio, dashboard screens.
 
 ## Acceptance criteria
 
-- [ ] AC1: `Interpretation` schema validated with Pydantic; invalid LLM
+- [x] AC1: `Interpretation` schema validated with Pydantic; invalid LLM
       output retried once with the error included, then `UNCLEAR`.
-- [ ] AC2: `StrandsLLMClient` implements the `LLMClient` protocol with
+- [x] AC2: `StrandsLLMClient` implements the `LLMClient` protocol with
       timeout, retries, circuit breaker and token/cost capture; unit-tested
       with injected fakes.
-- [ ] AC3: Prompts v1 versioned in `agent/prompts/`, version recorded in
+- [x] AC3: Prompts v1 versioned in `agent/prompts/`, version recorded in
       every interpretation.
-- [ ] AC4: Golden set ≥ 150 labeled messages covering §8.1 categories.
-- [ ] AC5: Eval runner computes intent accuracy, F1 per intent, health
+- [x] AC4: Golden set ≥ 150 labeled messages covering §8.1 categories.
+- [x] AC5: Eval runner computes intent accuracy, F1 per intent, health
       detection rate, latency and cost; report written to `evals/reports/`;
       offline baseline (deterministic parser) runs without a key.
-- [ ] AC6: Orchestrator uses the interpreter with parser fallback; degraded
+- [x] AC6: Orchestrator uses the interpreter with parser fallback; degraded
       mode path tested.
-- [ ] AC7: ADR-002 written.
-- [ ] AC8: Work-unit commits recorded.
+- [x] AC7: ADR-002 written.
+- [x] AC8: Work-unit commits recorded.
 
 ## Tasks
 
-- [ ] T1 — Deps pinned + Interpretation schema + interpreter core (TDD).
-- [ ] T2 — Prompts v1 + StrandsLLMClient wrapper with breaker/metering (TDD).
-- [ ] T3 — Golden set + eval runner + offline baseline report.
-- [ ] T4 — ADR-002 + orchestrator wiring (TDD) + close.
+- [x] T1 — Deps pinned + Interpretation schema + interpreter core (TDD).
+- [x] T2 — Prompts v1 + StrandsLLMClient wrapper with breaker/metering (TDD).
+- [x] T3 — Golden set + eval runner + offline baseline report.
+- [x] T4 — ADR-002 + orchestrator wiring (TDD) + close.
 
 ## Verification evidence
 
-(appended per task)
+- T1: RED → GREEN 8 tests — schema rejects unknown intents/out-of-range confidence; interpreter validates, retries once with the validation error, falls back to UNCLEAR on second failure or provider exception (degrades without retry), low confidence returned untouched for the caller. `e009dbc`.
+- T2: RED → GREEN 6 tests — breaker opens at N consecutive failures and resets after the window, open circuit fails fast without agent call, transient failure retried once, timeout enforced with asyncio.wait_for, usage/cost captured from AgentResult metrics, prompt carries message + rescue_id + pending context + validation-error retry note. Prompts v1 with es-ES few-shot incl. health, typos, abbreviations and manipulation. `341646f`.
+- T3: golden set generator → 150 labeled rows (§8.1 categories: reports with health, confirms, accepts, declines, 20 conditionals with time extraction, retracts, withdrawals, 15 ambiguous, questions, smalltalk, manipulation, english). Runner with parser/interpreter providers, F1 per intent, health detection, conditional-time accuracy, report JSON in evals/reports/. Offline baseline: parser accuracy 0.3733 (informational floor — the real-model threshold run ≥0.92 requires ANTHROPIC_API_KEY, documented). `0df0321`.
+- T4: wiring RED → GREEN 5 tests — LLM intents routed (accept/confirm/report/conditional→partial-coverage approval/withdraw/retract), UNCLEAR → single clarification then redirect, CircuitOpenError → parser fallback with zero LLM calls, no-interpreter keeps parser behavior; outbound clarification persisted for dedupe. ADR-002 written. `402ad19`.
+
+Final: 158 passed (2 skipped integration without DATABASE_URL); ruff + mypy strict clean.
 
 ## Commits
 
-(appended per commit)
+- `e009dbc` feat(backend): Interpretation schema and message interpreter with validation retry and UNCLEAR fallback (TDD)
+- `341646f` feat(backend): StrandsLLMClient with circuit breaker, timeout, retries and cost metering; prompts v1 (TDD)
+- `0df0321` feat(evals): golden set (150 labeled messages), eval runner with thresholds and offline parser baseline report
+- `402ad19` feat(backend): orchestrator routes LLM interpretations with parser fallback, conditional approvals and clarification dedupe (TDD)
 
 ## Progress / Next step
 
-Next: T1.
+Feature **llm-interpreter closed**. Real-model golden run (≥0.92 accuracy, ≥0.95 health detection) pending `ANTHROPIC_API_KEY` — documented as an assumption; `uv run python evals/runner.py --provider interpreter` when available. Next per spec order: `evals-observability` (Feature 4) or `manager-dashboard` slices (parallelizable).
