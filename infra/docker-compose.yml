@@ -67,8 +67,11 @@ services:
       redis:
         condition: service_healthy
 
-  # Observability stack (wired with the evals-observability feature).
-  # Start with: docker compose --profile observability up -d
+  # OPTIONAL local Langfuse for development only.
+  # DECISION (user): production/EC2 uses Langfuse Cloud (free tier) — no
+  # Langfuse containers on the instance; see docs/assumptions.md (A4) and the
+  # deployment ADR. Start locally with:
+  #   docker compose --profile observability up -d
   langfuse:
     image: langfuse/langfuse:2
     profiles: ["observability"]
