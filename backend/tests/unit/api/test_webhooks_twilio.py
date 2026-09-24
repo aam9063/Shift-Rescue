@@ -73,7 +73,8 @@ def test_inbound_with_valid_signature_is_accepted(client) -> None:
         data=params,
         headers={"X-Twilio-Signature": sign(URL, params)},
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
     assert client.fake_service.inbound == [
         ("+34600000001", "SM111", "hola, hoy no puedo ir")
     ]
@@ -112,7 +113,8 @@ def test_inbound_behind_a_tls_proxy_uses_the_forwarded_public_url(client) -> Non
             "Host": "masters-clarity-possible-shipped.trycloudflare.com",
         },
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
     assert client.fake_service.inbound == [("+34600000001", "SM999", "hola")]
 
 
@@ -123,7 +125,8 @@ def test_status_callback_updates_delivery(client) -> None:
         data=params,
         headers={"X-Twilio-Signature": sign("http://testserver/webhooks/twilio/status", params)},
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
     assert client.fake_service.statuses == [("SM111", "delivered")]
 
 

@@ -16,6 +16,14 @@ from app.core.config import get_settings
 
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio"])
 
+# Twilio requires a Content-Type on every webhook response (error 12300
+# otherwise); empty TwiML acknowledges without replying.
+EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+
+def _ack() -> Response:
+    return Response(content=EMPTY_TWIML, media_type="application/xml", status_code=200)
+
 
 def public_url(request: Request) -> str:
     """Reconstruct the URL Twilio signed.
@@ -140,7 +148,7 @@ async def twilio_inbound(
         return Response(status_code=400)
 
     await service.handle(from_phone, message_sid, body)
-    return Response(status_code=204)
+    return _ack()
 
 
 @router.post("/status")
@@ -164,4 +172,4 @@ async def twilio_status(
     status = params.get("MessageStatus", "")
     if message_sid and status:
         await service.update_status(message_sid, status)
-    return Response(status_code=204)
+    return _ack()
