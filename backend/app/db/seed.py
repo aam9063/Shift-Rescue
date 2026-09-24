@@ -28,7 +28,18 @@ DEMO_OPERATOR_EMAIL = "operator@laterraza.demo"
 DEMO_PASSWORD_HASH = "demo-not-a-real-hash"  # replaced by Argon2 hashes when auth lands
 DEMO_REAL_PHONES_LIMIT = 3
 
-SEED_START_DATE = datetime(2026, 9, 28)  # Monday
+def _demo_day_zero() -> datetime:
+    """Day 0 of the demo schedule = today (UTC midnight).
+
+    Guarantees a same-day demo always has shifts: on day 0 the rotation
+    assigns the floor evening shift (15:00-23:00) to `emp_09_floor`, and
+    leaves other floor employees free to cover it.
+    """
+    now = datetime.now(UTC)
+    return datetime(now.year, now.month, now.day, tzinfo=UTC)
+
+
+SEED_START_DATE = _demo_day_zero()
 SEED_DAYS = 14
 
 _ROLE_NAMES: dict[str, list[str]] = {

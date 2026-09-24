@@ -19,11 +19,22 @@ over WhatsApp. You need: a Twilio account and at least two phones.
 
 1. Console → **Messaging** → **Try it out** → **Send a WhatsApp message**
    (direct link: <https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn>).
-2. You will see a sandbox number (usually `+1 415 523 8886`) and a join code
-   like `join <two-random-words>`.
-3. **From each demo phone** (at least two): open WhatsApp, start a chat with
-   that sandbox number and send the join message exactly (e.g. `join happy-otter`).
-   Twilio replies “You are all set”.
+2. The page has a **Sandbox Participants** panel with the authoritative data
+   for YOUR account:
+   - the sandbox **number** (the default US sandbox is `+1 415 523 8886`; some
+     accounts get a region-specific number),
+   - the **join code**, e.g. `join voice-favorite`,
+   - the list of joined numbers.
+   Take the number and the code from HERE — not from doc examples (a doc
+   snippet showing `+4915888620339` is an illustration, not your sandbox).
+3. **From each demo phone** (at least TWO — one reports the absence, the other
+   may cover it): open WhatsApp, start a chat with that sandbox number and send
+   the join message exactly as shown (e.g. `join voice-favorite`). Twilio replies
+   “You are all set”. The panel then lists each joined number.
+
+   > Trial accounts can only deliver to **joined** numbers, so with a single
+   > phone you will see the absence flow but the offer to another employee will
+   > never arrive.
 4. Note the sandbox number in `whatsapp:+14155238886` format — that is your
    `TWILIO_WHATSAPP_FROM`.
 
@@ -87,9 +98,9 @@ In `backend/.env` (copy from `backend/.env.example`; the real `.env` is gitignor
 ```bash
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your_auth_token
-# Use the number the Twilio Console shows for YOUR sandbox (region-specific,
-# e.g. +4915888620339 for the EU sandbox). Format: whatsapp:<number>, no spaces.
-TWILIO_WHATSAPP_FROM=whatsapp:+4915888620339
+# Copy the number from the Console's "Sandbox Participants" panel.
+# US default sandbox: +14155238886. Format: whatsapp:<number>, no spaces.
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
 TWILIO_VALIDATE_SIGNATURE=true
 ```
 
@@ -120,6 +131,17 @@ one that reports the absence and the one who may cover it:
 
 ```bash
 DEMO_REAL_PHONES=emp_09_floor=+34600111222|emp_10_floor=+34600333444
+```
+
+**Suggested demo pair** (the seed starts the schedule on *today*, so these
+roles always exist for a same-day demo):
+
+- phone A → `emp_09_floor`: has today's floor **evening** shift (15:00–23:00)
+  → this is the one that reports the absence.
+- phone B → `emp_11_floor`: free that evening → this is the one who can cover.
+
+```bash
+DEMO_REAL_PHONES=emp_09_floor=+34600360794|emp_11_floor=+34600XXXXXX
 ```
 
 Seeded floor employees are `emp_09_floor` … `emp_17_floor`. To list them all:
