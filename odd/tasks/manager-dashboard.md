@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **slices 1-3 closed; slice 4 in progress (UI redesign per user mockups)**
+Status: **slices 1-3 closed; slice 4 (redesign) closed**
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -128,16 +128,28 @@ detail becomes a two-column layout under a dark-green hero band.
 
 ### Acceptance criteria (slice 4)
 
-- [ ] AC16: Serif display face (Lora) wired as `--font-serif` and used on
+- [x] AC16: Serif display face (Lora) wired as `--font-serif` and used on
       Today/Detail headings; countdowns render as MM:SS from injected clock.
-- [ ] AC17: Shell header is the dark-green band with logo, location pill,
+- [x] AC17: Shell header is the dark-green band with logo, location pill,
       + Report absence CTA and Approvals nav; FAB renders bottom-right.
-- [ ] AC18: Today renders the 4 kanban columns derived by pure helpers
+- [x] AC18: Today renders the 4 kanban columns derived by pure helpers
       (uncovered / seeking / needs approval / covered) with accented cards.
-- [ ] AC19: Rescue detail renders the green hero band (back, serif title,
+- [x] AC19: Rescue detail renders the green hero band (back, serif title,
       wave pill, giant countdown) and the two-column timeline + candidates
       (+ Excluded) body.
-- [ ] AC20: All tests green, build and lint clean; commits recorded.
+- [x] AC20: All tests green, build and lint clean; commits recorded.
+
+## Commits (slice 4)
+
+- `9c23037` feat(frontend): Lora serif display token and MM:SS countdown helper (TDD)
+- `3a25018` feat(frontend): kanban column derivation, wave/offer-preview rescue fields and mockup-mirroring mock data
+- `4342877` feat(frontend): dark-green AppHeader band with location pill and approvals nav, floating action button
+- `23fce8d` feat(frontend): Today screen as four-column kanban with MM:SS countdowns and accented cards
+- `a12431d` feat(frontend): rescue detail redesign with green hero band, serif title, giant countdown and two-column body
+
+Final verification slice 4: `pnpm vitest run` 78/78; `pnpm build` clean; `pnpm lint` clean.
+
+Next: user reviews the redesigned UI in the browser and iterates; Approvals screen restyle pending as follow-up.
 
 ## Slice 3 — Approvals screen (in progress)
 
