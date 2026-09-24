@@ -69,8 +69,18 @@ Out of scope (later features):
 
 ## Verification evidence
 
-(appended per task)
+- T1: `ce12d6d` — initial docs commit on `main`; branch `feature/frontend-foundation` created. Tooling: node 24.18.0, pnpm 11.4.0.
+- T2: `67f0713` — Vite 8 + React 19 + TS scaffold; Tailwind v4.3.3, TanStack Query 5, vitest 5. `pnpm vitest run` configured (`vite.config.ts` jsdom + setup).
+- T3: RED observed (2 suites failing: missing `Button.tsx` / `tokens.css`) → GREEN 15/15 → `2460f1a`. Lint clean.
+- T4: RED observed (App test failing: default export, unthemed) → GREEN 18/18; `pnpm build` clean; `pnpm lint` clean. Inter substitution and contract-test approach documented in `docs/assumptions.md` (A1, A3).
+
+## Commits
+
+- `ce12d6d` chore: project docs, design system spec and ODD feature doc
+- `67f0713` feat(frontend): scaffold Vite + React 19 + TypeScript with Tailwind v4, TanStack Query and vitest runner
+- `2460f1a` feat(frontend): DESIGN.md design tokens as Tailwind v4 theme and pill Button primitive (TDD)
+- (T4 commit pending)
 
 ## Progress / Next step
 
-Next: T1.
+T4 implementation done, tests/build/lint green. Remaining: commit T4, mark ACs, close feature. Next feature per user direction: continue with the remaining foundation slice (backend monorepo skeleton, Docker Compose, CI) or jump to a dashboard screen.
