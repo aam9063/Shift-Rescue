@@ -1,6 +1,6 @@
 # Feature: Manager Dashboard (`manager-dashboard`)
 
-Status: **slice 1 closed; slice 2 in progress** (Today screen closed; Rescue detail in progress)
+Status: **slice 1 closed; slice 2 closed** (Today + Rescue detail)
 Branch: `feature/manager-dashboard`
 Created: 2026-09-24
 
@@ -80,7 +80,19 @@ conversations, agent decisions, evals, WebSocket live updates, auth, router.
 
 ## Progress / Next step
 
-Slice 1 (Today screen) complete; AC1-AC5 verified. Branch `feature/manager-dashboard` on top of `dev`.
+Slice 1 (Today) and slice 2 (Rescue detail) complete; AC1-AC10 verified. Branch
+`feature/manager-dashboard` on top of `dev`. Merges are a user decision; the
+agent only asks before pushing.
+
+## Commits (slice 2)
+
+- `ff998aa` feat(frontend): rescue detail domain types and pure helpers (TDD)
+- `0911167` feat(frontend): mock rescue detail with timeline, scored candidates and offers
+- `b3a7dd5` feat(frontend): Rescue detail screen with timeline, candidates and offers; state-based navigation from Today (TDD) (amended to include deadline countdown in summary)
+
+Final verification slice 2: `pnpm vitest run` 55/55; `pnpm build` clean; `pnpm lint` clean.
+
+Next: slice 3 candidate — Approvals screen or Approve/reject wiring; or backend foundation.
 
 ## Slice 2 — Rescue detail screen (in progress)
 
@@ -103,10 +115,10 @@ number of screens justifies it.
 
 ### Acceptance criteria (slice 2)
 
-- [ ] AC6: Rescue detail renders summary, ordered timeline, candidates with
+- [x] AC6: Rescue detail renders summary, ordered timeline, candidates with
       human-readable exclusion reasons (stable codes) and offers with status.
-- [ ] AC7: Candidate ordering is deterministic (score desc, tie-break by id).
-- [ ] AC8: Timeline events render chronologically with actor and English
+- [x] AC7: Candidate ordering is deterministic (score desc, tie-break by id).
+- [x] AC8: Timeline events render chronologically with actor and English
       labels; no health details anywhere (spec §10).
-- [ ] AC9: Back navigation works via state callback.
-- [ ] AC10: All tests green, build and lint clean; commits recorded.
+- [x] AC9: Back navigation works via state callback.
+- [x] AC10: All tests green, build and lint clean; commits recorded.
