@@ -22,6 +22,11 @@ logs:
 seed:
 	$(COMPOSE) exec api uv run python -m app.db.seed_cli
 
+## Run the eval suites (golden baseline + scenario invariants)
+eval:
+	cd backend && uv run pytest tests/unit/evals tests/unit/agent -q
+	uv run python evals/runner.py --provider parser
+
 ## Run every test suite
 test: test-backend test-frontend
 
