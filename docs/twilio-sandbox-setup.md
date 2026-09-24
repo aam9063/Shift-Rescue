@@ -246,3 +246,32 @@ Debugger reports a 502/12300. Our endpoints answer with empty TwiML
   window are free-form.
 - The sandbox session expires ~3 days after joining → rejoin with `join <code>`.
 - Messages are prefixed with "Sent from your Twilio trial account".
+
+## Trial limitation found the hard way: no programmatic sends
+
+While wiring the live demo we hit a hard trial-account wall:
+
+| Test | Result |
+|---|---|
+| Inbound WhatsApp → our webhook | works (200 OK, employee recognised) |
+| Our outbound via Messages API (`From`/`To`/`Body`) | `400 21654 ContentSid Required` |
+| Same with a custom `TemplateKey` field | same error (field is not the cause) |
+| Content API (`content.twilio.com/v1/Content`) | `401: This feature is not available on a Trial account` |
+
+**Conclusion:** a Twilio **trial** account can *receive* WhatsApp messages (and
+Twilio's own sandbox auto-reply is delivered), but **cannot send WhatsApp
+messages through the API** — neither free-form nor templates, because the
+Content API is closed. The two-phone demo therefore requires either an upgraded
+Twilio account or the simulated channel (`Simulator de demo` screen).
+
+Everything on our side is verified: signature validation, employee mapping,
+agent decision and the outbound attempt (rejected only by the trial policy).
+
+Log evidence from the live run:
+
+```
+twilio_inbound_received  sandbox=whatsapp:+14155238886 sender=+34*******94
+twilio_inbound_handled   sandbox=whatsapp:+14155238886 recognized=true
+outbound_delivery_failed template_key=absence_confirm error="400 21654 ContentSid Required"
+POST /webhooks/twilio/inbound -> 200 OK
+```

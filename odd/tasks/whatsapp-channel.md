@@ -1,6 +1,6 @@
 # Feature: WhatsApp real (`whatsapp-channel`)
 
-Status: **code complete; real-phone demo pending user setup**
+Status: **code complete and verified live up to Twilio's trial outbound limit**
 Branch: `feature/whatsapp-channel` (stacked on `feature/evals-observability`)
 Created: 2026-09-24
 
