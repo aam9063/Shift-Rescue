@@ -275,3 +275,18 @@ twilio_inbound_handled   sandbox=whatsapp:+14155238886 recognized=true
 outbound_delivery_failed template_key=absence_confirm error="400 21654 ContentSid Required"
 POST /webhooks/twilio/inbound -> 200 OK
 ```
+
+### After upgrading: `401 20003 Primary compliance profile is not approved`
+
+Upgrading removes the trial send block, but Twilio then requires the account's
+**Primary Compliance Profile (KYC)** before any WhatsApp send is accepted:
+
+```
+401 20003: "Primary compliance profile is not approved.
+Please refer to documentation and complete the KYC process in Trust Hub."
+```
+
+Fix: Console → **Trust Hub** → **Customer Profiles** → create and submit the
+**Primary Customer Profile** (legal name, address, contact details, intended
+use) → wait for approval. No code change is needed; the outbound path is
+already verified up to the provider.
