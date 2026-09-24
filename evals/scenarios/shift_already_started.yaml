@@ -1,0 +1,16 @@
+id: shift_already_started
+description: Report arrives after the shift started; late cover granted.
+now: "2026-10-03T16:30:00+02:00"
+floor_count: 4
+shift_starts_in_minutes: -90
+absence:
+  employee: emp_01_floor
+  message: "no llego hoy"
+personas:
+  emp_02_floor:
+    - after_minutes: 2
+      text: "si"
+expect:
+  final_state: COVERED
+  covering_employee_in: [emp_02_floor]
+  invariants: all

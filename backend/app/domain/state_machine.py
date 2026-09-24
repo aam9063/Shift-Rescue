@@ -34,6 +34,7 @@ class StateMachineEvent(StrEnum):
     APPROVAL_REJECTED = auto()
     APPROVAL_TIMEOUT = auto()
     COVERING_WITHDREW = auto()
+    TECHNICAL_FAILURE = auto()
     MANAGER_RESOLVED = auto()
     LATE_ACCEPTANCE = auto()
 
@@ -133,6 +134,10 @@ _TRANSITIONS: dict[tuple[State, StateMachineEvent], TransitionResult] = {
         (SideEffect.RESUME_OFFERING,),
     ),
     # COVERED
+    (State.COVERED, StateMachineEvent.TECHNICAL_FAILURE): TransitionResult(
+        State.ESCALATED,
+        (SideEffect.NOTIFY_MANAGER,),
+    ),
     (State.COVERED, StateMachineEvent.COVERING_WITHDREW): TransitionResult(
         State.OFFERING,
         (

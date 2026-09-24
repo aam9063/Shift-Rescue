@@ -4,8 +4,9 @@ Invariants are checked with plain code over the final world snapshot —
 never with an LLM judge. Zero violations block CI; any violation fails.
 """
 
-from datetime import time
+from datetime import UTC, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.domain.quiet_hours import offers_allowed
 
@@ -54,13 +55,17 @@ def check_invariants(snapshot: dict[str, Any]) -> list[str]:
         violations.append("INV3: approval-required assignment without APPROVAL_DECIDED audit")
 
     # Invariant 4: no offers sent during quiet hours outside the 3h grace.
+    # DB datetimes are UTC walls; quiet hours are location wall times.
+    location_tz = ZoneInfo(snapshot.get("location_tz", "UTC"))
     for offer in offers:
         if offer.get("sent_at") is None:
             continue
         starts_at = shift.get("starts_at")
         if starts_at is None:
             continue
-        if not offers_allowed(offer["sent_at"], starts_at, time(23, 0), time(7, 0)):
+        sent_local = offer["sent_at"].astimezone(UTC).astimezone(location_tz)
+        start_local = starts_at.astimezone(UTC).astimezone(location_tz)
+        if not offers_allowed(sent_local, start_local, time(23, 0), time(7, 0)):
             violations.append(
                 f"INV4: offer {offer['id']} sent during quiet hours"
             )
@@ -74,7 +79,14 @@ def check_invariants(snapshot: dict[str, Any]) -> list[str]:
             violations.append(f"INV5: {count} offers to {employee_id} in one rescue")
 
     # Invariant 6: every state change audited (required audit types per state).
-    required = REQUIRED_AUDITS_BY_STATE.get(status, set())
+    required = set(REQUIRED_AUDITS_BY_STATE.get(status, set()))
+    if status == "ESCALATED":
+        # Reached either by exhaustion/deadline (ESCALATED) or HRIS failure.
+        if not audit_types & {"ESCALATED", "HRIS_FAILURE"}:
+            violations.append("INV6: escalation without ESCALATED/HRIS_FAILURE audit")
+        required.discard("ESCALATED")
+    if not offers:
+        required.discard("OFFER_SENT")
     missing = required - audit_types
     if missing:
         violations.append(f"INV6: missing audit events for {status}: {sorted(missing)}")

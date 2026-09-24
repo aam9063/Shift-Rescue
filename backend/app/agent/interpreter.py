@@ -15,6 +15,10 @@ from app.ports import LLMClient
 FALLBACK = Interpretation(intent="UNCLEAR", confidence=0.0)
 
 
+class ProviderUnavailableError(Exception):
+    """Provider outage/timeout: orchestrator degrades to the parser (§9.3)."""
+
+
 class MessageInterpreter:
     def __init__(
         self,
@@ -43,8 +47,8 @@ class MessageInterpreter:
                 ).model_copy()
             except ValidationError as error:
                 last_error = str(error)
-            except Exception:
-                # Provider outage/timeout: degrade immediately (spec §9.3).
-                return FALLBACK
+            except Exception as error:
+                # Provider outage/timeout: degrade to the parser (spec §9.3).
+                raise ProviderUnavailableError(str(error)) from error
 
         return FALLBACK

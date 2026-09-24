@@ -48,7 +48,12 @@ async def build_world(
 ) -> tuple[World, Any]:
     """Fresh SQLite world: location, manager, N floor employees, one shift."""
     now = datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
-    engine = create_async_engine("sqlite+aiosqlite://")
+    import os
+    import tempfile
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     db = async_sessionmaker(engine, expire_on_commit=False)

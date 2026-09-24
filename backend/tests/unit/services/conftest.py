@@ -15,7 +15,12 @@ PROVIDER_ID = "provider_msg_1"
 
 @pytest.fixture()
 async def db():
-    engine = create_async_engine("sqlite+aiosqlite://")
+    import os
+    import tempfile
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)

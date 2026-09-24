@@ -77,13 +77,15 @@ async def test_two_invalid_outputs_fall_back_to_unclear() -> None:
     assert len(llm.calls) == 2
 
 
-async def test_llm_exception_falls_back_to_unclear_without_retry() -> None:
+async def test_llm_exception_signals_provider_unavailable_for_parser_fallback() -> None:
+    from app.agent.interpreter import ProviderUnavailableError
+
     llm = FakeLLM([TimeoutError("provider down"), VALID])
     interpreter = MessageInterpreter(llm=llm)
 
-    result = await interpreter.interpret("sí voy", {})
+    with pytest.raises(ProviderUnavailableError):
+        await interpreter.interpret("sí voy", {})
 
-    assert result.intent == "UNCLEAR"
     assert len(llm.calls) == 1  # exceptions degrade immediately (§9.3)
 
 

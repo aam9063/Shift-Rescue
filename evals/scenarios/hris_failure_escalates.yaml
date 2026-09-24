@@ -1,0 +1,16 @@
+id: hris_failure_escalates
+description: HRIS assignment fails after retries; technical escalation.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+hris_fail_assignments: 3
+absence:
+  employee: emp_01_floor
+  message: "hoy no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 2
+      text: "si"
+expect:
+  final_state: ESCALATED
+  templates_sent: [manager_escalated]
+  invariants: all

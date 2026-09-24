@@ -1,0 +1,19 @@
+id: acceptance_race
+description: Two candidates accept within the same minute; only one wins.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "me he levantado fatal, hoy no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 2
+      text: "si"
+  emp_03_floor:
+    - after_minutes: 2
+      text: "si"
+expect:
+  final_state: COVERED
+  covering_employee_in: [emp_02_floor, emp_03_floor]
+  templates_sent: [offer_already_covered]
+  invariants: all

@@ -5,6 +5,8 @@ entire scenarios in milliseconds, and snapshots the final world for the
 deterministic invariant checker.
 """
 
+import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -60,15 +62,28 @@ class ShiftRescueTarget:
         self.employee_count = floor_count
 
     @classmethod
-    async def create(cls, floor_count: int = 4, now: datetime | None = None) -> "ShiftRescueTarget":
+    async def create(
+        cls,
+        floor_count: int = 4,
+        now: datetime | None = None,
+        *,
+        shift_starts_in: timedelta = timedelta(minutes=20),
+        hris_fail_assignments: int = 0,
+        llm_down: bool = False,
+        timezone: str = "UTC",
+    ) -> "ShiftRescueTarget":
         now = now or datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
-        engine = create_async_engine("sqlite+aiosqlite://")
+        # A temp FILE database avoids the StaticPool shared-connection quirks
+        # of in-memory SQLite (nested session commits).
+        fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         db = async_sessionmaker(engine, expire_on_commit=False)
 
         async with db() as session:
-            session.add(Location(id=DEMO_LOCATION_ID, name=DEMO_LOCATION_NAME, timezone="UTC"))
+            session.add(Location(id=DEMO_LOCATION_ID, name=DEMO_LOCATION_NAME, timezone=timezone))
             session.add(
                 Manager(
                     id="mgr_1",
@@ -96,20 +111,36 @@ class ShiftRescueTarget:
                         active=True,
                     )
                 )
+            # Normalize to UTC: SQLite keeps the naive wall of whatever is stored.
+            shift_start_utc = (now + shift_starts_in).astimezone(UTC)
+            shift_end_utc = shift_start_utc + timedelta(hours=8)
             session.add(
                 Shift(
                     id="shift_1",
                     location_id=DEMO_LOCATION_ID,
                     role="floor",
-                    starts_at=now + timedelta(minutes=20),
-                    ends_at=now + timedelta(hours=8, minutes=20),
+                    starts_at=shift_start_utc,
+                    ends_at=shift_end_utc,
                     employee_id="emp_01_floor",
                     status="scheduled",
                 )
             )
             await session.commit()
 
-        return cls(engine, db, now, floor_count)
+        target = cls(engine, db, now, floor_count)
+        if hris_fail_assignments:
+            target.workforce.fail_next_assignments(hris_fail_assignments)
+        if llm_down:
+            from app.agent.interpreter import MessageInterpreter
+
+            class DownLLM:
+                async def interpret(self, message_body: str, context: dict) -> dict:
+                    raise TimeoutError("LLM provider down")
+
+            target.orchestrator.interpreter = MessageInterpreter(
+                llm=DownLLM(), confidence_threshold=0.75
+            )
+        return target
 
     async def inject_employee_message(
         self,
@@ -133,6 +164,17 @@ class ShiftRescueTarget:
     async def advance_clock(self, minutes: float) -> None:
         self.clock.advance(timedelta(minutes=minutes))
         await self.scheduler.run_due(self.clock.now())
+
+    async def latest_pending_approval(self) -> str | None:
+        from app.db.models import ApprovalRequest
+
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(ApprovalRequest).where(ApprovalRequest.status == "pending")
+                )
+            ).scalars().first()
+            return row.id if row else None
 
     async def snapshot(self) -> dict[str, Any]:
         async with self.session_factory() as session:
