@@ -29,6 +29,11 @@ services:
 
   api:
     build: ../backend
+    # backend/.env feeds the container (Twilio, LLM keys, DEMO_REAL_PHONES…).
+    # The `environment` block below still wins for in-network URLs.
+    env_file:
+      - path: ../backend/.env
+        required: false
     environment:
       APP_ENV: local
       DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
@@ -44,6 +49,9 @@ services:
   worker:
     build: ../backend
     command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    env_file:
+      - path: ../backend/.env
+        required: false
     environment:
       APP_ENV: local
       DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
@@ -57,6 +65,9 @@ services:
   beat:
     build: ../backend
     command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - path: ../backend/.env
+        required: false
     environment:
       APP_ENV: local
       DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue

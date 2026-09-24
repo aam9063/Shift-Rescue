@@ -27,57 +27,122 @@ over WhatsApp. You need: a Twilio account and at least two phones.
 4. Note the sandbox number in `whatsapp:+14155238886` format — that is your
    `TWILIO_WHATSAPP_FROM`.
 
-## 3. Expose your local API to the internet
+## 3. Expose your local API to the internet (only for local testing)
 
-Twilio must reach your machine. Two options:
+Twilio has to POST to a public URL. Your laptop is not public, so **for local
+testing** you need a tunnel; **when the demo is deployed on EC2** you skip this
+and use the instance URL directly.
 
-**Option A — ngrok (development)**
+**Option A — cloudflared (no account needed, quickest)**
+
+```bash
+# one-time install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+cloudflared tunnel --url http://localhost:8000
+```
+
+It prints a URL like `https://random-words.trycloudflare.com` — that is your
+public base URL.
+
+**Option B — ngrok**
 
 ```bash
 # one-time: https://ngrok.com/download  (then `ngrok config add-authtoken <token>`)
 ngrok http 8000
 ```
 
-Copy the public URL, e.g. `https://abc123.ngrok-free.app`.
+Prints a URL like `https://abc123.ngrok-free.app`.
 
-**Option B — deployed host** (the EC2 instance from ADR-003, once deployed):
-use its public HTTPS URL.
+**Option C — deployed EC2 host** (after the deployment feature): use
+`https://<your-domain>` and ignore the tunnel entirely.
+
+> Note: free tunnels get a NEW url every restart — if you restart it, redo
+> step 4 with the new URL.
 
 ## 4. Point the sandbox webhooks at your API
 
-In Console → Messaging → Try it out → WhatsApp sandbox → **Sandbox settings**:
+In the Twilio Console, the WhatsApp sandbox page has the join QR/code on the
+**Participants** side and the URL fields under **Sandbox settings**. Routes to
+find it (any of these works):
+
+- Direct link: <https://console.twilio.com/us1/develop/sms/settings/whatsapp-sandbox>
+- Console → **Develop** → **Messaging** → **Try it out** → **Send a WhatsApp
+  message** → tab **Sandbox settings**
+- Console → **Messaging** → **Settings** → **WhatsApp Sandbox Settings**
 
 | Field | Value |
 |---|---|
-| “When a message comes in” | `https://<your-public-url>/webhooks/twilio/inbound` (HTTP **POST**) |
-| “Status callback URL” | `https://<your-public-url>/webhooks/twilio/status` (POST) |
+| **When a message comes in** | `https://<your-public-url>/webhooks/twilio/inbound` (HTTP **POST**) |
+| **Status callback URL** | `https://<your-public-url>/webhooks/twilio/status` (POST) |
 
-Save. (If you restart ngrok you get a new URL: update both fields.)
+Save. If the page has no such fields, your console version keeps them under
+**Messaging → Settings → WhatsApp Sandbox Settings** (the same two boxes).
+
+> If you restart the tunnel (cloudflared/ngrok) the URL changes: update both
+> fields again.
 
 ## 5. Configure the backend
 
-In `backend/.env` (copy from `backend/env.example`; the dotted filename is gitignored):
+In `backend/.env` (copy from `backend/.env.example`; the real `.env` is gitignored):
 
 ```bash
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your_auth_token
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+# Use the number the Twilio Console shows for YOUR sandbox (region-specific,
+# e.g. +4915888620339 for the EU sandbox). Format: whatsapp:<number>, no spaces.
+TWILIO_WHATSAPP_FROM=whatsapp:+4915888620339
 TWILIO_VALIDATE_SIGNATURE=true
 ```
 
-Then restart the API (`make up` or `make dev-backend`).
+`backend/.env` is already wired into the containers (`env_file` in
+`infra/docker-compose.yml`), so recreate the stack to pick the values up:
+
+```bash
+make up      # or: docker compose -f infra/docker-compose.yml up -d
+```
+
+Check the API sees them:
+
+```bash
+docker compose -f infra/docker-compose.yml exec api uv run python -c   "from app.core.config import get_settings; s=get_settings(); print(bool(s.twilio_account_sid), s.twilio_whatsapp_from)"
+```
 
 Signature validation is on: requests without a valid `X-Twilio-Signature`
 are rejected with 403. Only disable it (`false`) for local debugging.
 
-## 6. Make sure the demo employees exist with real numbers
+## 6. Map your two real phones to seeded employees
 
-The webhook maps the sender phone to an employee by `phone_e164`. Map your
-two sandbox phones to seeded employees:
+The webhook finds the employee by phone (`employee.phone_e164`). The seed reads
+`DEMO_REAL_PHONES`: up to 3 entries, `employee_id=phone` (or `full_name=phone`),
+separated by `|`, phones in E.164 (with `+`, no spaces).
+
+**a)** Open `backend/.env` and add the two phones that joined the sandbox — the
+one that reports the absence and the one who may cover it:
 
 ```bash
-DEMO_REAL_PHONES="emp_09_floor=+34600111222|emp_10_floor=+34600333444" \
-  uv run python -m app.db.seed_cli
+DEMO_REAL_PHONES=emp_09_floor=+34600111222|emp_10_floor=+34600333444
+```
+
+Seeded floor employees are `emp_09_floor` … `emp_17_floor`. To list them all:
+
+```bash
+docker compose -f infra/docker-compose.yml exec postgres \
+  psql -U shift_rescue -c "SELECT id, full_name FROM employee ORDER BY id;"
+```
+
+**b)** Recreate the stack (so the API picks up the new value) and re-seed:
+
+```bash
+make up
+make seed
+# equivalent of make seed:
+# docker compose -f infra/docker-compose.yml exec api uv run python -m app.db.seed_cli
+```
+
+**c)** Verify the mapping landed:
+
+```bash
+docker compose -f infra/docker-compose.yml exec postgres \
+  psql -U shift_rescue -c "SELECT id, full_name, phone_e164 FROM employee WHERE phone_e164 NOT LIKE '+34600000%' ORDER BY id;"
 ```
 
 Then run a real rescue:
