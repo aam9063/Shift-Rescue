@@ -640,19 +640,37 @@ class RescueOrchestrator:
                     actor="system",
                 )
             )
-            provider_id = await self._channel.send(
-                recipient_phone_e164=self._phone_of(employee),
-                body=render(
-                    "offer",
-                    employee_name=employee["full_name"],
-                    location_name=location_name,
-                    role=self._role_label(shift.role),
-                    start=self._fmt(shift.starts_at, location_tz),
-                    end=self._fmt(shift.ends_at, location_tz),
-                ),
-                template_key="offer",
-                rescue_id=case.id,
-            )
+            try:
+                provider_id = await self._channel.send(
+                    recipient_phone_e164=self._phone_of(employee),
+                    body=render(
+                        "offer",
+                        employee_name=employee["full_name"],
+                        location_name=location_name,
+                        role=self._role_label(shift.role),
+                        start=self._fmt(shift.starts_at, location_tz),
+                        end=self._fmt(shift.ends_at, location_tz),
+                    ),
+                    template_key="offer",
+                    rescue_id=case.id,
+                )
+            except Exception as error:
+                # Provider rejected the recipient (unjoined number, delivery
+                # failure…): drop that candidate, keep the wave alive (§5.5).
+                offer_row = await self._offer(session, offer_id)
+                if offer_row is not None:
+                    offer_row.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer_id}_delivery_failed",
+                        rescue_id=case.id,
+                        type="DELIVERY_FAILED",
+                        payload={"employee_id": candidate.employee_id, "error": str(error)[:200]},
+                        actor="system",
+                    )
+                )
+                continue
+
             session.add(
                 Message(
                     id=f"msg_out_{offer_id}",
