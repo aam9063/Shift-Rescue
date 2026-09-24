@@ -7,11 +7,10 @@ Status: update delivery status by provider message id.
 
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-import structlog
 
 from app.channels.twilio_whatsapp import validate_twilio_signature
 from app.core.config import get_settings
