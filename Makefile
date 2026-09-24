@@ -26,7 +26,7 @@ seed:
 test: test-backend test-frontend
 
 test-backend:
-	cd backend && uv run pytest
+	cd backend && uv run pytest --cov
 
 test-frontend:
 	cd frontend && pnpm vitest run
