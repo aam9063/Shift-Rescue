@@ -88,7 +88,7 @@ class StrandsLLMClient:
 
         result: Any = None
         last_error: Exception | None = None
-        for attempt in range(self._retries + 1):
+        for _attempt in range(self._retries + 1):
             try:
                 result = await asyncio.wait_for(agent.invoke_async(prompt), timeout=self._timeout)
                 break
