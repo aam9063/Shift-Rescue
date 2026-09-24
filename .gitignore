@@ -1,0 +1,14 @@
+# Local Pi runtime state
+.atl/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.local
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
