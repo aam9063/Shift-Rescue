@@ -11,8 +11,11 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import structlog
+
 from app.channels.twilio_whatsapp import validate_twilio_signature
 from app.core.config import get_settings
+from app.observability.redaction import mask_phone
 
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio"])
 
@@ -144,10 +147,22 @@ async def twilio_inbound(
     message_sid = params.get("MessageSid", "")
     body = params.get("Body", "")
     from_phone = params.get("From", "").replace("whatsapp:", "")
+    to_sandbox = params.get("To", "")
     if not message_sid or not from_phone:
         return Response(status_code=400)
 
-    await service.handle(from_phone, message_sid, body)
+    # Operational trace: which sandbox called us and who wrote (phone masked).
+    structlog.get_logger(__name__).info(
+        "twilio_inbound_received",
+        sandbox=to_sandbox,
+        sender=mask_phone(from_phone),
+        message_sid=message_sid,
+    )
+
+    handled = await service.handle(from_phone, message_sid, body)
+    structlog.get_logger(__name__).info(
+        "twilio_inbound_handled", sandbox=to_sandbox, recognized=handled
+    )
     return _ack()
 
 
