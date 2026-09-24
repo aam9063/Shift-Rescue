@@ -1,48 +1,62 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { RescueDetailScreen } from './RescueDetailScreen'
 
-const NOW = new Date('2026-10-03T06:45:00+02:00')
+const NOW = new Date('2026-10-03T06:45:48+02:00')
 
-describe('RescueDetailScreen', () => {
-  it('goes back to Today when the back button is pressed', async () => {
-    const onBack = vi.fn()
-    renderWithProviders(<RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={onBack} />)
-    await screen.findByText(/Lucía F\./)
-    await userEvent.click(screen.getByRole('button', { name: /Back to Today/ }))
-    expect(onBack).toHaveBeenCalledOnce()
+describe('RescueDetailScreen (redesign per user mockup)', () => {
+  it('renders the green hero band with back link, serif title and wave pill', async () => {
+    const { container } = renderWithProviders(
+      <RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={vi.fn()} />,
+    )
+    await screen.findByText(/Iker M\./)
+    const hero = container.querySelector('.bg-green-house')
+    expect(hero).not.toBeNull()
+    expect(screen.getByRole('button', { name: /Back to Today/ })).toBeInTheDocument()
+    const title = screen.getByRole('heading', { level: 1 })
+    expect(title).toHaveClass('font-serif')
+    expect(title).toHaveTextContent('Floor · 15:00 – 23:00')
+    expect(screen.getByText(/wave 2 of 3/)).toBeInTheDocument()
   })
 
-  it('renders the rescue summary with the absent employee and the affected shift', async () => {
+  it('renders the giant MM:SS countdown with its caption in the hero', async () => {
     renderWithProviders(<RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={vi.fn()} />)
-    await screen.findByText(/Lucía F\./)
-    expect(screen.getByText(/07:00 – 15:00/)).toBeInTheDocument()
-    expect(screen.getByText(/Offering shift to candidates/)).toBeInTheDocument()
+    await screen.findByText('04:12')
+    expect(screen.getByText(/minutes left/)).toBeInTheDocument()
   })
 
-  it('renders the timeline in chronological order with English labels', async () => {
+  it('renders the agent timeline chronologically with colored dots and AI badge', async () => {
     renderWithProviders(<RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={vi.fn()} />)
-    const timeline = await screen.findByRole('list', { name: 'Rescue timeline' })
+    const timeline = await screen.findByRole('list', { name: 'Agent timeline' })
     const items = [...timeline.querySelectorAll('li')]
     const texts = items.map((li) => li.textContent ?? '')
-    expect(texts.some((t) => t.includes('Rescue opened'))).toBe(true)
     expect(texts.findIndex((t) => t.includes('Rescue opened')))
       .toBeLessThan(texts.findIndex((t) => t.includes('Offer declined')))
+    expect(texts.findIndex((t) => t.includes('Offer declined')))
+      .toBeLessThan(texts.findLastIndex((t) => t.includes('Offer sent')))
+    // AI badge on the LLM-interpreted event
+    expect(within(items[3]).getByText('AI')).toBeInTheDocument()
   })
 
-  it('renders candidates ordered by score with exclusion reasons', async () => {
+  it('renders candidate cards with score and per-offer status, then excluded rows', async () => {
     renderWithProviders(<RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={vi.fn()} />)
-    await screen.findByText('María G.')
-    expect(screen.getByText(/7\.5h rest/)).toBeInTheDocument()
-    expect(screen.getByText(/Office staff cannot cover floor shifts/)).toBeInTheDocument()
-    expect(screen.getByText(/Would exceed contracted 30h weekly hours/)).toBeInTheDocument()
+    await screen.findByText('Marta L.')
+    expect(screen.getByText(/Score 0\.82/)).toBeInTheDocument()
+    expect(screen.getAllByText(/no overtime/).length).toBeGreaterThan(0)
+    expect(screen.getByText('declined')).toBeInTheDocument()
+    expect(screen.getByText('Excluded')).toBeInTheDocument()
+    expect(screen.getByText('MAX_WEEKLY_HOURS')).toBeInTheDocument()
+    expect(screen.getByText('REST_VIOLATION')).toBeInTheDocument()
   })
 
-  it('renders offers with their wave and status', async () => {
-    renderWithProviders(<RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={vi.fn()} />)
-    await screen.findAllByText(/Wave 1/)
-    expect(screen.getAllByText(/Pending|Declined/).length).toBeGreaterThanOrEqual(2)
+  it('goes back to Today when the back button is pressed', async () => {
+    const onBack = vi.fn()
+    const user = userEvent.setup()
+    renderWithProviders(<RescueDetailScreen rescueId="rescue_001" now={NOW} onBack={onBack} />)
+    await screen.findByText(/Iker M\./)
+    await user.click(screen.getByRole('button', { name: /Back to Today/ }))
+    expect(onBack).toHaveBeenCalledOnce()
   })
 })

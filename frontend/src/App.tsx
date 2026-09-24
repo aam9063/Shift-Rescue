@@ -14,7 +14,7 @@ const queryClient = new QueryClient()
  * warm cream canvas, floating action button, state-based navigation
  * (a router lands when the number of screens justifies it).
  */
-function Shell() {
+function Shell({ now }: { now?: Date }) {
   const [view, setView] = useState<AppView>('today')
   const [selectedRescueId, setSelectedRescueId] = useState<string | null>(null)
   const { approvals } = usePendingApprovals()
@@ -41,7 +41,7 @@ function Shell() {
         ) : view === 'approvals' ? (
           <ApprovalsScreen />
         ) : (
-          <TodayScreen onOpenRescue={setSelectedRescueId} />
+          <TodayScreen now={now} onOpenRescue={setSelectedRescueId} />
         )}
       </main>
       <Fab label="Report absence" />
@@ -49,10 +49,15 @@ function Shell() {
   )
 }
 
-export function App() {
+export interface AppProps {
+  /** Injected clock for deterministic tests; defaults to now. */
+  now?: Date
+}
+
+export function App({ now = new Date() }: AppProps) {
   return (
     <QueryClientProvider client={queryClient}>
-      <Shell />
+      <Shell now={now} />
     </QueryClientProvider>
   )
 }

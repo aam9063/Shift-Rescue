@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { buildTodayColumns, formatCountdown, formatShiftTime } from '../domain/today'
 import {
-  RoleOrder,
   type ApprovalRequest,
   type OfferPreview,
   type RescueCase,
