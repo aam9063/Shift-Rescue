@@ -565,7 +565,13 @@ class RescueOrchestrator:
                     id=f"audit_{offer_id}_sent",
                     rescue_id=case.id,
                     type="OFFER_SENT",
-                    payload={"offer_id": offer_id, "wave": wave_number},
+                    payload={
+                        "offer_id": offer_id,
+                        "wave": wave_number,
+                        # Invariant-2 evidence: the eligibility snapshot at send time.
+                        "eligible": candidate.eligible,
+                        "requires_approval": candidate.requires_approval,
+                    },
                     actor="system",
                 )
             )

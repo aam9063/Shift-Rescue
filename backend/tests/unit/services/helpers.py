@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.channels.simulated import SimulatedChannel
 from app.core.clock import FakeClock
 from app.db.models import Base, Employee, Location, Manager, Shift
 from app.db.seed import DEMO_LOCATION_ID, DEMO_LOCATION_NAME, DEMO_MANAGER_EMAIL
@@ -17,41 +18,12 @@ PROVIDER_ID = "provider_msg_1"
 MANAGER_PHONE = "+34600999001"
 
 
-class RecordingChannel:
-    def __init__(self) -> None:
-        self.sent: list[dict[str, Any]] = []
-
-    async def send(
-        self,
-        recipient_phone_e164: str,
-        body: str,
-        *,
-        template_key: str | None = None,
-        rescue_id: str | None = None,
-    ) -> str:
-        self.sent.append(
-            {
-                "to": recipient_phone_e164,
-                "body": body,
-                "template_key": template_key,
-                "rescue_id": rescue_id,
-            }
-        )
-        return f"prov_{len(self.sent)}"
-
-    def with_template(self, template_key: str) -> list[dict[str, Any]]:
-        return [m for m in self.sent if m["template_key"] == template_key]
-
-    def to_manager(self) -> list[dict[str, Any]]:
-        return [m for m in self.sent if m["to"] == MANAGER_PHONE]
-
-
 class World:
     def __init__(self, db: async_sessionmaker, now: datetime, floor_count: int = 4) -> None:
         self.session_factory = db
         self.workforce = MockWorkforceAdapter(db)
         self.clock = FakeClock(now)
-        self.channel = RecordingChannel()
+        self.channel = SimulatedChannel()
         self.scheduler = SimScheduler()
         self.orchestrator = RescueOrchestrator(
             session_factory=db,
@@ -64,6 +36,9 @@ class World:
             self.scheduler.register(name, handler)
         self.now = now
         self.floor_count = floor_count
+
+    def to_manager(self) -> list[dict[str, Any]]:
+        return self.channel.to(MANAGER_PHONE)
 
 
 async def build_world(

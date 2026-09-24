@@ -29,7 +29,8 @@ class RankedCandidate:
     employee_id: str
     score: float
     requires_approval: bool
-    explanations: tuple[Reason, ...]
+    explanations: tuple[Reason, ...] = ()
+    eligible: bool = True
 
 
 def rank_candidates(
@@ -95,6 +96,7 @@ def rank_candidates(
                 score=round(score, 4),
                 requires_approval=result.requires_approval,
                 explanations=explanations,
+                eligible=result.eligible,
             )
         )
 
