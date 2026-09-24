@@ -164,3 +164,26 @@ async def test_health_details_are_redacted_before_persisting(world, db) -> None:
     inbound = [m for m in messages if m.direction == "inbound"]
     assert inbound[0].body_redacted == "[redacted: health details]"
     assert "migraña" not in inbound[0].body_redacted
+
+
+async def test_in_progress_shift_is_found_even_if_it_started_hours_ago(world, db, now) -> None:
+    """spec §5.3: a shift already running can be covered for the remainder."""
+    from sqlalchemy import select
+
+    from app.db.models import Shift
+
+    async with db() as session:
+        shift = (await session.execute(select(Shift).where(Shift.id == "shift_1"))).scalar_one()
+        shift.starts_at = now - timedelta(hours=6)
+        shift.ends_at = now + timedelta(hours=2)
+        await session.commit()
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+
+    assert world.channel.with_template("absence_confirm"), "in-progress shift not found"
+    assert not world.channel.with_template("out_of_scope")

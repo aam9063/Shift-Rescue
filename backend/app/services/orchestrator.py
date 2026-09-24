@@ -1512,11 +1512,13 @@ class RescueOrchestrator:
         return by_opened
 
     async def _upcoming_shifts_of(self, employee_id: str, now: datetime) -> list:
+        """Shifts that have not ended yet — including one already in progress,
+        which can be covered for the remaining time (spec §5.3)."""
         location_id = await self._location_of(employee_id)
         if location_id is None:
             return []
         schedule = await self._workforce.get_schedule(
-            location_id, now - timedelta(hours=4), now + timedelta(hours=48)
+            location_id, now - timedelta(hours=24), now + timedelta(days=2)
         )
         return [s for s in schedule if s.employee_id == employee_id and s.ends_at > now]
 
