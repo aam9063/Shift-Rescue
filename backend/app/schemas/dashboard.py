@@ -129,6 +129,7 @@ class CandidateResultOut(BaseModel):
 class OfferOut(BaseModel):
     id: str
     rescueId: str
+    employeeId: str
     employeeName: str
     waveNumber: int
     status: str

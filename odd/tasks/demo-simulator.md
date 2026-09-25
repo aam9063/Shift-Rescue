@@ -91,6 +91,19 @@ timers follow real time.
   the real-time-timer limitation.
 - Evidence in this document.
 
+## Acceptance race scenario
+
+The Simulator screen's **"Run scenario: two candidates accept at once"** button
+scripts the concurrency invariant for the audience. It finds the active
+`OFFERING` rescue with at least two `PENDING` offers, then sends an acceptance
+(`"sí"`, the same reply the race integration test uses) as **both** candidates
+through `POST /dev/simulator/{employee_id}/messages` — the two calls are fired
+together, not sequentially, so the race is real. What to watch for: exactly one
+candidate keeps the shift (the Today board shows the covered shift) and the
+other is told the shift is already covered (`offer_already_covered`). If there
+is no active offering rescue or fewer than two pending offers, the control says
+so instead of doing nothing; the demo needs live mode.
+
 ## Acceptance criteria
 
 1. With the stack running, a message sent from the Simulator screen opens a real

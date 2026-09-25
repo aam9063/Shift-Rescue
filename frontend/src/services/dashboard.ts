@@ -18,11 +18,13 @@ import {
 } from './dashboardMock'
 import {
   advanceDemoClock,
+  fetchActiveRescues,
   fetchAgentDecisions,
   fetchConversationThread,
   fetchConversations,
   fetchDemoClock,
   fetchOpsMetrics,
+  fetchRescueDetail,
   fetchSettings,
   fetchSimulatorEmployees,
   fetchSystemStatus,
@@ -251,4 +253,116 @@ export function useSendDemoMessage(): {
 /** The demo clock is UTC; show HH:MM without a timezone debate. */
 function formatVirtualTime(iso: string): string {
   return iso.slice(11, 16)
+}
+
+// --- Acceptance-race scenario (spec §7.6): the honest concurrency demo -------
+
+/** What the demo employees reply to accept: the same answer the
+ * acceptance-race integration test uses, so the agent reads an acceptance. */
+const SCENARIO_ACCEPTANCE_TEXT = 'sí'
+
+const SCENARIO_READY_HINT =
+  'Watch the Today board: exactly one candidate keeps the shift and the other is told it is already covered.'
+
+const SCENARIO_DONE_MESSAGE =
+  'Done: one candidate should now hold the shift; the other was told it is already covered.'
+
+type ScenarioTarget =
+  | { problem: string }
+  | { rescueId: string; candidates: { employeeId: string; employeeName: string }[] }
+
+export type ScenarioStatus = 'loading' | 'ready' | 'running' | 'unavailable'
+
+/**
+ * The "two candidates accept at once" demo: it fires both acceptance messages
+ * concurrently, so the orchestrator's single-winner invariant is actually
+ * exercised on screen instead of described. It finds the active OFFERING
+ * rescue with at least two pending offers; anything else is reported
+ * honestly instead of silently doing nothing.
+ */
+export function useAcceptanceRaceScenario(): {
+  status: ScenarioStatus
+  message: string
+  run: () => void
+} {
+  const queryClient = useQueryClient()
+  const mockMode = isMockMode()
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const query = useQuery({
+    queryKey: ['demo-scenario'],
+    queryFn: async (): Promise<ScenarioTarget> => {
+      const rescues = await fetchActiveRescues()
+      const offering = rescues.find((rescue) => rescue.status === 'OFFERING')
+      if (!offering) {
+        return { problem: 'No active rescue is offering right now: open a rescue first.' }
+      }
+      const detail = await fetchRescueDetail(offering.id)
+      const candidates = detail.offers
+        .filter((offer) => offer.status === 'PENDING' && offer.employeeId)
+        .map((offer) => ({
+          employeeId: offer.employeeId as string,
+          employeeName: offer.employeeName,
+        }))
+      if (candidates.length < 2) {
+        return {
+          problem: 'The offering rescue has fewer than two pending offers to race.',
+        }
+      }
+      return { rescueId: offering.id, candidates: candidates.slice(0, 2) }
+    },
+    enabled: !mockMode,
+    staleTime: LIVE_STALE_TIME_MS,
+  })
+
+  const target = query.data
+  let status: ScenarioStatus
+  let message: string
+  if (mockMode) {
+    status = 'unavailable'
+    message = 'The scenario runs in live mode: start the stack and open this screen again.'
+  } else if (running) {
+    status = 'running'
+    message = 'Both candidates are answering at the same time…'
+  } else if (result !== null) {
+    status = 'unavailable'
+    message = result
+  } else if (query.isPending) {
+    status = 'loading'
+    message = ''
+  } else if (target !== undefined && 'problem' in target) {
+    status = 'unavailable'
+    message = target.problem
+  } else {
+    status = 'ready'
+    message = SCENARIO_READY_HINT
+  }
+
+  const run = () => {
+    if (mockMode || running || target === undefined || 'problem' in target) {
+      return
+    }
+    setRunning(true)
+    setResult(null)
+    // Both sends fire together: awaiting the first before starting the second
+    // would decide the winner by order and make the race meaningless.
+    void Promise.allSettled(
+      target.candidates.map((candidate) =>
+        sendSimulatorMessage(candidate.employeeId, SCENARIO_ACCEPTANCE_TEXT),
+      ),
+    ).then(() => {
+      setRunning(false)
+      setResult(SCENARIO_DONE_MESSAGE)
+      // The worker settled the race: every board that shows its outcome
+      // refetches, and the scenario re-evaluates the (now settled) rescue.
+      void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+      void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+      void queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['demo-scenario'] })
+    })
+  }
+
+  return { status, message, run }
 }

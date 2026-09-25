@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SimulatorEmployee } from '../domain/types'
+import type { Offer, RescueCase, RescueDetail, SimulatorEmployee } from '../domain/types'
 import {
   advanceDemoClock,
+  fetchActiveRescues,
   fetchConversationThread,
   fetchDemoClock,
+  fetchRescueDetail,
   fetchSimulatorEmployees,
   sendSimulatorMessage,
 } from '../services/api'
@@ -20,6 +22,8 @@ vi.mock('../services/api', () => ({
   sendSimulatorMessage: vi.fn(),
   fetchDemoClock: vi.fn(),
   advanceDemoClock: vi.fn(),
+  fetchActiveRescues: vi.fn(),
+  fetchRescueDetail: vi.fn(),
 }))
 
 vi.mock('../services/dataSource', () => ({
@@ -72,7 +76,67 @@ beforeEach(() => {
     now: '2026-10-03T15:21:00+00:00',
     offsetSeconds: 600,
   })
+  vi.mocked(fetchActiveRescues).mockResolvedValue([])
+  vi.mocked(fetchRescueDetail).mockRejectedValue(new Error('no rescue detail expected'))
 })
+
+// --- Acceptance-race scenario fixtures ---------------------------------------
+
+const SCENARIO_RESCUE: RescueCase = {
+  id: 'rescue_race',
+  shiftId: 'shift_floor_01',
+  absentEmployeeName: 'Ana Floor',
+  status: 'OFFERING',
+  deadlineAt: '2026-10-03T06:50:00+02:00',
+  offerPreviews: [],
+}
+
+function offer(
+  id: string,
+  employeeId: string,
+  employeeName: string,
+  status: Offer['status'],
+): Offer {
+  return {
+    id,
+    rescueId: SCENARIO_RESCUE.id,
+    employeeId,
+    employeeName,
+    waveNumber: 1,
+    status,
+    sentAt: '2026-10-03T06:41:00+02:00',
+    expiresAt: '2026-10-03T06:51:00+02:00',
+  }
+}
+
+function detailWith(offers: Offer[]): RescueDetail {
+  return {
+    rescue: SCENARIO_RESCUE,
+    shift: {
+      id: 'shift_floor_01',
+      locationId: 'loc_1',
+      role: 'floor',
+      startsAt: '2026-10-03T15:00:00+02:00',
+      endsAt: '2026-10-03T23:00:00+02:00',
+      assigneeName: 'Ana Floor',
+      status: 'absent',
+    },
+    timeline: [],
+    candidates: [],
+    offers,
+  }
+}
+
+const TWO_PENDING = detailWith([
+  offer('offer_1', 'emp_1', 'Ana Floor', 'PENDING'),
+  offer('offer_2', 'emp_2', 'Bruno Bar', 'PENDING'),
+])
+
+const ONE_PENDING = detailWith([offer('offer_1', 'emp_1', 'Ana Floor', 'PENDING')])
+
+function scenarioButton() {
+  return screen.getByRole('button', { name: 'Run scenario: two candidates accept at once' })
+}
 
 describe('SimulatorScreen (spec §7.6, real data)', () => {
   it('renders the real employee list with their real thread', async () => {
@@ -113,6 +177,78 @@ describe('SimulatorScreen (spec §7.6, real data)', () => {
 
     expect(advanceDemoClock).toHaveBeenCalledWith(600)
     expect(await screen.findByText('15:21')).toBeInTheDocument()
+  })
+
+  it('disables the scenario and says why when no rescue is offering', async () => {
+    renderScreen()
+
+    expect(await screen.findByText(/No active rescue is offering right now/)).toBeInTheDocument()
+    expect(scenarioButton()).toBeDisabled()
+    expect(sendSimulatorMessage).not.toHaveBeenCalled()
+  })
+
+  it('disables the scenario when the rescue has fewer than two pending offers', async () => {
+    vi.mocked(fetchActiveRescues).mockResolvedValue([SCENARIO_RESCUE])
+    vi.mocked(fetchRescueDetail).mockResolvedValue(ONE_PENDING)
+    renderScreen()
+
+    expect(await screen.findByText(/fewer than two pending offers to race/)).toBeInTheDocument()
+    expect(scenarioButton()).toBeDisabled()
+    expect(sendSimulatorMessage).not.toHaveBeenCalled()
+  })
+
+  it('fires both acceptances together and explains what to watch', async () => {
+    vi.mocked(fetchActiveRescues).mockResolvedValue([SCENARIO_RESCUE])
+    vi.mocked(fetchRescueDetail).mockResolvedValue(TWO_PENDING)
+    // Deferred promises: neither send resolves until the test allows it, so
+    // any sequential implementation (await then send) would show one call.
+    let resolveFirst!: (id: string) => void
+    let resolveSecond!: (id: string) => void
+    vi.mocked(sendSimulatorMessage).mockImplementation(
+      (employeeId) =>
+        new Promise((resolve) => {
+          if (employeeId === 'emp_1') {
+            resolveFirst = resolve
+          } else {
+            resolveSecond = resolve
+          }
+        }),
+    )
+    const user = userEvent.setup()
+    renderScreen()
+
+    expect(await screen.findByText(/exactly one candidate keeps the shift/)).toBeInTheDocument()
+    expect(scenarioButton()).toBeEnabled()
+
+    await user.click(scenarioButton())
+
+    // Both sends were started before either resolved: a real race.
+    expect(sendSimulatorMessage).toHaveBeenCalledTimes(2)
+    expect(sendSimulatorMessage).toHaveBeenCalledWith('emp_1', 'sí')
+    expect(sendSimulatorMessage).toHaveBeenCalledWith('emp_2', 'sí')
+    expect(screen.getByRole('button', { name: 'Running scenario…' })).toBeDisabled()
+
+    await act(async () => {
+      resolveFirst('sim_1')
+      resolveSecond('sim_2')
+    })
+
+    expect(
+      await screen.findByText(/Done: one candidate should now hold the shift/),
+    ).toBeInTheDocument()
+    // The rescue/shift/approval boards refetch to show the outcome.
+    await waitFor(() => {
+      expect(fetchActiveRescues).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('keeps the scenario unavailable and explained behind VITE_USE_MOCK', async () => {
+    vi.mocked(isMockMode).mockReturnValue(true)
+    renderScreen()
+
+    expect(await screen.findByText(/runs in live mode/)).toBeInTheDocument()
+    expect(scenarioButton()).toBeDisabled()
+    expect(fetchActiveRescues).not.toHaveBeenCalled()
   })
 })
 

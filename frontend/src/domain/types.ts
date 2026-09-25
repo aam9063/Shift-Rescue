@@ -78,6 +78,8 @@ export type OfferStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'COUNTER_PROPOSE
 export interface Offer {
   id: string
   rescueId: string
+  /** Always present from the live API; the offline mock predates the field. */
+  employeeId?: string
   employeeName: string
   waveNumber: number
   status: OfferStatus

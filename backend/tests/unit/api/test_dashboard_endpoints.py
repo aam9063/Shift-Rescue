@@ -187,6 +187,9 @@ async def test_rescue_detail(client) -> None:
     assert [offer["status"] for offer in detail["offers"]] == ["DECLINED", "PENDING"]
     assert {c["name"] for c in detail["candidates"]} == {"Bruno Bar", "Carla Kitchen"}
     assert detail["offers"][1]["employeeName"] == "Bruno Bar"
+    # The offer payload carries the employee id so the simulator can speak as
+    # a candidate (acceptance-race scenario).
+    assert detail["offers"][1]["employeeId"] == "emp_2"
     await assert_no_health_leak(response)
 
 

@@ -128,13 +128,11 @@ export class ApiDashboardDataSource implements DashboardDataSource {
   }
 
   async getActiveRescues(): Promise<RescueCase[]> {
-    const locationId = await getLocationId()
-    const rescues = await apiFetch<RescueCase[]>(`/api/rescues?location_id=${locationId}`)
-    return rescues.filter((rescue) => ACTIVE_RESCUE_STATUSES.has(rescue.status))
+    return fetchActiveRescues()
   }
 
   async getRescueDetail(rescueId: string): Promise<RescueDetail> {
-    return apiFetch<RescueDetail>(`/api/rescues/${encodeURIComponent(rescueId)}`)
+    return fetchRescueDetail(rescueId)
   }
 
   async getPendingApprovals(): Promise<ApprovalRequest[]> {
@@ -256,6 +254,19 @@ export function fetchSystemStatus(): Promise<SystemStatus> {
 }
 
 // --- Demo simulator (spec §7.5/§7.6) ------------------------------------------
+
+/** Active rescues (same filter as the Today board); the demo scenario uses
+ * this to find the rescue it can race on. */
+export async function fetchActiveRescues(): Promise<RescueCase[]> {
+  const locationId = await getLocationId()
+  const rescues = await apiFetch<RescueCase[]>(`/api/rescues?location_id=${locationId}`)
+  return rescues.filter((rescue) => ACTIVE_RESCUE_STATUSES.has(rescue.status))
+}
+
+/** Full rescue detail: offers carry the employee ids the scenario needs. */
+export async function fetchRescueDetail(rescueId: string): Promise<RescueDetail> {
+  return apiFetch<RescueDetail>(`/api/rescues/${encodeURIComponent(rescueId)}`)
+}
 
 interface DemoClockWire {
   now: string

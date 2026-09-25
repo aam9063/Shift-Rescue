@@ -32,7 +32,16 @@ RESCUE_CASE_KEYS = {
 }
 OFFER_PREVIEW_KEYS = {"employeeName", "status"}
 AUDIT_EVENT_KEYS = {"id", "rescueId", "type", "actor", "createdAt", "interpretedByAi"}
-OFFER_KEYS = {"id", "rescueId", "employeeName", "waveNumber", "status", "sentAt", "expiresAt"}
+OFFER_KEYS = {
+    "id",
+    "rescueId",
+    "employeeId",
+    "employeeName",
+    "waveNumber",
+    "status",
+    "sentAt",
+    "expiresAt",
+}
 CANDIDATE_KEYS = {
     "employeeId",
     "name",

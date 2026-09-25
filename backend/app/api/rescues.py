@@ -254,6 +254,7 @@ async def get_rescue(
             OfferOut(
                 id=offer.id,
                 rescueId=offer.rescue_id,
+                employeeId=offer.employee_id,
                 employeeName=name or "Unknown",
                 waveNumber=offer.wave_number,
                 status=offer.status,

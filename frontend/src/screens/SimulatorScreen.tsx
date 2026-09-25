@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import type { SimulatorEmployee } from '../domain/types'
-import { useDemoClock, useDemoEmployees, useDemoThread, useSendDemoMessage } from '../services/dashboard'
+import {
+  useAcceptanceRaceScenario,
+  useDemoClock,
+  useDemoEmployees,
+  useDemoThread,
+  useSendDemoMessage,
+} from '../services/dashboard'
 
 const CLOCK_PRESETS = [
   { label: '+10 min', seconds: 600 },
@@ -103,6 +109,7 @@ function EmployeePhone({ employee }: { employee: SimulatorEmployee }) {
 export function SimulatorScreen() {
   const { employees } = useDemoEmployees()
   const { time, advance } = useDemoClock()
+  const scenario = useAcceptanceRaceScenario()
 
   return (
     <div className="space-y-6">
@@ -140,12 +147,21 @@ export function SimulatorScreen() {
             Broker timers keep their real-time ETA; deadlines and escalations follow the demo clock.
           </p>
         </div>
-        <button
-          type="button"
-          className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-text-primary active:scale-95"
-        >
-          Load scenario: acceptance race
-        </button>
+        <div className="flex flex-col items-start gap-1">
+          <button
+            type="button"
+            onClick={scenario.run}
+            disabled={scenario.status !== 'ready'}
+            className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {scenario.status === 'running'
+              ? 'Running scenario…'
+              : 'Run scenario: two candidates accept at once'}
+          </button>
+          {scenario.message !== '' && (
+            <p className="text-xs tracking-tight text-text-secondary">{scenario.message}</p>
+          )}
+        </div>
       </div>
     </div>
   )

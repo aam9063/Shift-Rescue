@@ -14,6 +14,12 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // The demo-only routes live under /dev (spec §7.5). Without this the SPA
+      // fallback answers HTML and the simulator's clock reads undefined.
+      '/dev': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     },
   },
   test: {
