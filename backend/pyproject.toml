@@ -15,6 +15,10 @@ dependencies = [
     "redis>=5.0",
     "tzdata>=2026.4",
     "strands-agents==1.56.0",
+    "openai>=1.68",  # provider SDK for LLM_PROVIDER=openai (strands extra floor)
+    "opentelemetry-api>=1.44",  # matches the version strands already pulls in
+    "opentelemetry-sdk>=1.44",
+    "opentelemetry-exporter-otlp-proto-http>=1.44",  # Langfuse Cloud OTLP/HTTP
     "python-multipart>=0.0.32",
     "httpx>=0.28.1",
 ]

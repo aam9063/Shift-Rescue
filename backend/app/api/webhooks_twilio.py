@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.factory import build_interpreter, describe_provider
 from app.channels.twilio_whatsapp import validate_twilio_signature
 from app.core.config import get_settings
 from app.observability.redaction import mask_phone
@@ -117,16 +118,23 @@ def get_twilio_service() -> TwilioInboundService:
             from_number=settings.twilio_whatsapp_from,
         )
         scheduler = SimScheduler()
+        interpreter = build_interpreter(settings)
         orchestrator = RescueOrchestrator(
             session_factory=session_factory,
             workforce=MockWorkforceAdapter(session_factory),
             channel=channel,
             scheduler=scheduler,
             clock=__import__("app.core.clock", fromlist=["SystemClock"]).SystemClock(),
+            interpreter=interpreter,
         )
         for name, handler in orchestrator.task_handlers().items():
             scheduler.register(name, handler)
         _service = TwilioInboundService(session_factory, orchestrator, scheduler)
+        structlog.get_logger(__name__).info(
+            "llm_path",
+            active=interpreter is not None,
+            provider=describe_provider(settings),
+        )
     return _service
 
 

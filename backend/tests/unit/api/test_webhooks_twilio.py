@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.api.webhooks_twilio as webhooks_twilio
 from app.api.webhooks_twilio import (
     TwilioInboundService,
     get_twilio_service,
@@ -214,3 +215,42 @@ async def test_service_updates_delivery_status(service_world) -> None:
             await session.execute(select(Message).where(Message.provider_message_id == "SM111"))
         ).scalar_one()
         assert message.delivery_status == "delivered"
+
+
+# --- runtime injection: the LLM path (ADR-004, fail-closed) ------------------
+
+
+def _reset_runtime_service(monkeypatch) -> None:
+    """Force get_twilio_service to rebuild (it memoizes a module singleton)."""
+    monkeypatch.setattr(webhooks_twilio, "_service", None)
+
+
+@pytest.fixture()
+def runtime_world(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite://")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    get_settings.cache_clear()
+    _reset_runtime_service(monkeypatch)
+    yield
+    _reset_runtime_service(monkeypatch)
+    get_settings.cache_clear()
+
+
+def test_service_factory_degrades_without_a_provider(runtime_world) -> None:
+    """LLM_PROVIDER=none: the orchestrator still builds, interpreter is None."""
+    service = get_twilio_service()
+
+    assert service._orchestrator.interpreter is None
+
+
+def test_service_factory_injects_a_stubbed_interpreter(runtime_world, monkeypatch) -> None:
+    stub = object()
+    monkeypatch.setattr(webhooks_twilio, "build_interpreter", lambda _settings: stub)
+
+    service = get_twilio_service()
+
+    assert service._orchestrator.interpreter is stub
