@@ -24,7 +24,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: shift_rescue
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: shift_rescue
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -79,7 +79,7 @@ services:
   caddy:
     image: ${ECR_REGISTRY}/shift-rescue-web:${IMAGE_TAG:-latest}
     environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN (e.g. 1-2-3-4.sslip.io) in .env}
+      DOMAIN: ${DOMAIN}
     ports:
       - "80:80"
       - "443:443"

@@ -35,6 +35,14 @@ for name in $(aws ssm get-parameters-by-path --path "${SSM_PREFIX}" --recursive 
 	printf '%s=%s\n' "$key" "${value//$'\n'/\\n}" >>"${APP_DIR}/.env"
 done
 
+echo "==> Checking required variables"
+for required in DOMAIN POSTGRES_PASSWORD JWT_SECRET; do
+	if ! grep -q "^${required}=..*" "${APP_DIR}/.env"; then
+		echo "Missing required value in .env: ${required}" >&2
+		exit 1
+	fi
+done
+
 echo "==> Logging in to ECR"
 aws ecr get-login-password --region "${AWS_REGION}" |
 	docker login --username AWS --password-stdin "$(grep '^ECR_REGISTRY=' "${APP_DIR}/.env" | cut -d= -f2)"
