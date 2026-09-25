@@ -53,7 +53,9 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://<domain>/   # 200 (SPA)
 | Re-seed demo data | `docker compose -f docker-compose.prod.yml run --rm api uv run --no-dev python -m app.db.seed_cli` |
 | Migrations | `docker compose -f docker-compose.prod.yml run --rm api uv run --no-dev python -m alembic upgrade head` |
 | Update a secret | `aws ssm put-parameter --name /shift-rescue/prod/X --value '...' --type SecureString --overwrite` then re-run the deploy workflow |
-| Pause the agent | Settings screen (or `PATCH /api/locations/<id>/settings`) |
+| Pause the agent | Settings screen (or `PATCH /api/locations/<id>/settings`); while paused, inbound WhatsApp messages are forwarded to the manager and audited (`AGENT_PAUSED_FORWARD`) |
+| Degraded status | `curl https://<domain>/api/status` → `{degraded, reasons, details}` (LLM not configured, circuit open, agent paused) |
+| Purge old messages | `docker compose -f docker-compose.prod.yml run --rm api uv run --no-dev python -m app.observability.retention` (or the Celery task `app.workers.tasks.purge_old_messages`) |
 | Rotate the SSH key | create a new key pair, add the public key to `~/.ssh/authorized_keys`, update the `EC2_SSH_KEY` secret |
 
 ## 5. Incident playbook
@@ -66,6 +68,7 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://<domain>/   # 200 (SPA)
 | Twilio shows `12300` | webhook response without Content-Type | our endpoints answer TwiML; check the API version deployed |
 | Messages not delivered (`63015`) | recipient never joined the sandbox | have the employee send `join <code>` to the sandbox number |
 | `20003 Primary compliance profile` | Twilio Trust Hub profile `draft` | complete and submit the profile in Trust Hub |
+| Nobody receives offers | `GET /api/status` (check `llm_circuit_open`, `agent_paused`), `logs api \| grep outbound_limit_exceeded` | unpause the agent or wait for the circuit to close; the outbound limit (3/employee/hour by default) also blocks extra sends |
 | Rescue stuck in OFFERING | `logs api \| grep scheduler` | the lifespan ticker drives timeouts; if the API was restarted mid-flight, re-run the flow (in-memory scheduler) |
 | DB full / slow | `df -h`, `docker system df` | prune images (`docker image prune -f`), grow the EBS volume |
 

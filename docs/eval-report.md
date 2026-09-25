@@ -51,6 +51,19 @@ ambiguous input, questions, smalltalk, manipulation attempts and English.
 The parser baseline is deliberately low: it exists so the product still works
 when the LLM is unavailable, not to replace it.
 
+### Resilience checks (spec §9.3, §9.4, §10)
+
+| Check | Result |
+|---|---|
+| `llm_down_degraded` scenario (provider down → deterministic parser) | passes |
+| `hris_failure_escalates` scenario (retries ×3 → technical escalation) | passes |
+| Agent paused → forward to the manager, no case, no offers | unit tested |
+| Health details never reach the manager in the paused forward | unit tested |
+| Outbound limit per employee per hour (default 3) → blocked + audited + alerted | unit tested |
+| Retention purge removes old messages; audits and cases survive; idempotent | unit tested |
+| Degraded reasons (LLM not configured / circuit open / agent paused) | unit tested |
+| Operations screen shows the degraded banner | component tested |
+
 ## 4. Failures found during development (and their fixes)
 
 These are real defects the project caught — most of them by running the system
