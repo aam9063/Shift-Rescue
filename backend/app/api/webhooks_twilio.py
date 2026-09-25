@@ -133,7 +133,7 @@ def get_twilio_service() -> TwilioInboundService:
         structlog.get_logger(__name__).info(
             "llm_path",
             active=interpreter is not None,
-            provider=describe_provider(settings),
+            detail=describe_provider(settings),
         )
     return _service
 
