@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://shift_rescue:shift_rescue@localhost:5432/shift_rescue"
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = "dev-only-secret"
+    jwt_expires_minutes: int = 720  # 12 h access tokens (spec §7.5)
+    # Comma-separated origins allowed by CORS for the dashboard SPA (spec §7.5).
+    cors_origins: str = "http://localhost:5173"
     demo_real_phones: str | None = None  # "Name:+346...|Name:+346..." (max 3, sandbox)
 
     # Twilio WhatsApp (docs/twilio-sandbox-setup.md)
@@ -51,6 +54,11 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
     sentry_dsn: str = ""  # declared for .env parity; Sentry init not wired yet
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Parsed CORS origins: exactly the configured ones, no wildcard."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
     def llm_enabled(self) -> bool:

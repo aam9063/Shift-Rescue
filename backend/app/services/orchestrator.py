@@ -1412,6 +1412,56 @@ class RescueOrchestrator:
             await session.execute(select(Offer).where(Offer.id == offer_id))
         ).scalar_one_or_none()
 
+    async def close_rescue(self, rescue_id: str, decided_by: str) -> None:
+        """Manual manager close (spec §7.5), runs in the worker.
+
+        ESCALATED cases take the defined MANAGER_RESOLVED transition; active
+        offering/approval states cancel like an approved cancel_rescue. Cases
+        in OPEN (no candidates yet) or terminal states are left untouched —
+        the task is idempotent and never invents undefined transitions.
+        """
+        now = self._clock.now()
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == rescue_id).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if case is None:
+                return
+            state = State(case.status)
+            terminal = {
+                State.COVERED,
+                State.PARTIALLY_COVERED,
+                State.CLOSED_BY_MANAGER,
+                State.CANCELLED,
+            }
+            if state in terminal:
+                return  # already terminal
+            if state == State.OPEN:
+                return  # no defined close transition yet; the deadline owns it
+            if state == State.ESCALATED:
+                result = transition(state, StateMachineEvent.MANAGER_RESOLVED)
+                case.resolution = "resolved_by_manager"
+            else:  # OFFERING / AWAITING_APPROVAL: cancel like an approved cancel
+                result = transition(state, StateMachineEvent.APPROVAL_APPROVED_CANCEL)
+                case.resolution = "cancelled"
+                await self._supersede_offers(session, case.id)
+            case.status = result.new_state.value
+            case.closed_at = now
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=case.id,
+                    # The dashboard timeline vocabulary has CANCELLED (the close
+                    # is a cancellation from the manager's point of view).
+                    type="CANCELLED",
+                    payload={"closed_by": "manager", "resolution": case.resolution},
+                    actor=f"manager:{decided_by}",
+                )
+            )
+            await session.commit()
+
     async def _supersede_offers(self, session: AsyncSession, rescue_id: str) -> None:
         pending = (
             await session.execute(

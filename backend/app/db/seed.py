@@ -20,12 +20,15 @@ from app.db.models import (
     Manager,
     Shift,
 )
+from app.security.passwords import hash_password
 
 DEMO_LOCATION_NAME = "La Terraza del Puerto"
 DEMO_LOCATION_ID = "loc_la_terraza"
 DEMO_MANAGER_EMAIL = "manager@laterraza.demo"
 DEMO_OPERATOR_EMAIL = "operator@laterraza.demo"
-DEMO_PASSWORD_HASH = "demo-not-a-real-hash"  # replaced by Argon2 hashes when auth lands
+# Documented demo password for the seeded managers (runbook + login screen);
+# a seeded DEMO system, never a real credential.
+DEMO_PASSWORD = "laterraza-demo-2026"
 DEMO_REAL_PHONES_LIMIT = 3
 
 def _demo_day_zero() -> datetime:
@@ -279,6 +282,9 @@ async def seed_database(session: AsyncSession) -> None:
         (DEMO_MANAGER_EMAIL, "Demo Manager", "manager"),
         (DEMO_OPERATOR_EMAIL, "Demo Operator", "operator"),
     ):
+        # Reseed always refreshes the hash: the legacy placeholder
+        # "demo-not-a-real-hash" can never survive a reseed.
+        password_hash = hash_password(DEMO_PASSWORD)
         manager = (
             await session.execute(select(Manager).where(Manager.email == email))
         ).scalar_one_or_none()
@@ -287,9 +293,13 @@ async def seed_database(session: AsyncSession) -> None:
                 Manager(
                     name=name,
                     email=email,
-                    password_hash=DEMO_PASSWORD_HASH,
+                    password_hash=password_hash,
                     role=role,
+                    location_ids=[DEMO_LOCATION_ID],
                 )
             )
+        else:
+            manager.password_hash = password_hash
+            manager.role = role
 
     await session.commit()

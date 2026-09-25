@@ -54,6 +54,33 @@ def process_inbound_message(self: Any, from_phone: str, message_sid: str, body: 
     return handled
 
 
+@celery_app.task(name="app.workers.tasks.apply_approval_decision")
+def apply_approval_decision(approval_id: str, decision: str, decided_by: str) -> bool:
+    """Apply a manager approval decision in the worker (spec §2.1, §7.5).
+
+    The orchestrator owns the domain logic (state machine, offers, audit); the
+    task only bridges Celery to it. Idempotent: `decide_approval` no-ops when
+    the approval is not pending.
+    """
+    from app.runtime import get_worker_runtime
+
+    asyncio.run(
+        get_worker_runtime().orchestrator.decide_approval(approval_id, decision, decided_by)
+    )
+    logger.info("worker_approval_applied", approval_id=approval_id, decision=decision)
+    return True
+
+
+@celery_app.task(name="app.workers.tasks.close_rescue")
+def close_rescue_task(rescue_id: str, decided_by: str) -> bool:
+    """Manual manager close in the worker (spec §7.5): same rule as approvals."""
+    from app.runtime import get_worker_runtime
+
+    asyncio.run(get_worker_runtime().orchestrator.close_rescue(rescue_id, decided_by))
+    logger.info("worker_rescue_closed", rescue_id=rescue_id)
+    return True
+
+
 @celery_app.task(name="app.workers.tasks.run_due_jobs")
 def run_due_jobs() -> int:
     """Beat tick (spec §7.3): run due scheduled jobs, publish the snapshot."""

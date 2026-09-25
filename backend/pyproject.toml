@@ -21,6 +21,8 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.44",  # Langfuse Cloud OTLP/HTTP
     "python-multipart>=0.0.32",
     "httpx>=0.28.1",
+    "argon2-cffi>=23.1",  # password hashing for manager login (spec §7.5)
+    "pyjwt>=2.9",  # JWT issue/verify for the dashboard API (spec §7.5)
 ]
 
 [dependency-groups]

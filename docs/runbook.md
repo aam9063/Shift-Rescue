@@ -3,6 +3,60 @@
 Everything a maintainer needs to deploy, smoke-test, debug and roll back the
 demo environment (single EC2 instance + Langfuse Cloud, see ADR-003).
 
+## 0. Dashboard API access (demo credentials and CORS)
+
+### Demo credentials
+
+The seed (`backend/app/db/seed.py`) creates two dashboard users for the demo
+location `loc_la_terraza` ("La Terraza del Puerto"). Both share one documented
+demo password, `DEMO_PASSWORD` — a **seeded demo-system password, never a real
+credential**:
+
+| User | Email | Role | Password |
+|---|---|---|---|
+| Demo Manager | `manager@laterraza.demo` | `manager` | `laterraza-demo-2026` |
+| Demo Operator | `operator@laterraza.demo` | `operator` | `laterraza-demo-2026` |
+
+Passwords are stored as Argon2id hashes; a reseed always refreshes them, so
+the legacy placeholder `demo-not-a-real-hash` can never authenticate.
+
+### Login and calling the API
+
+Every `/api` route except `POST /api/auth/login` requires a bearer token
+(`GET /health`, `GET /api/status` and the Twilio webhooks stay public).
+`GET /api/interpretations*` additionally requires the `operator` role.
+
+```bash
+# 1. Login (12-hour token, JWT_EXPIRES_MINUTES).
+TOKEN=$(curl -fsS https://<domain>/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"manager@laterraza.demo","password":"laterraza-demo-2026"}' \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["accessToken"])')
+
+# 2. Call any dashboard endpoint with the token.
+curl -fsS https://<domain>/api/locations -H "Authorization: Bearer $TOKEN"
+curl -fsS "https://<domain>/api/rescues?status=OFFERING&location_id=loc_la_terraza" \
+  -H "Authorization: Bearer $TOKEN"
+curl -fsS https://<domain>/api/locations/loc_la_terraza/settings \
+  -H "Authorization: Bearer $TOKEN"
+
+# 3. Writes answer 202: the decision/close runs in the Celery worker.
+curl -fsS -X POST https://<domain>/api/approvals/<id>/approve \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Failed logins are always a generic `401 {"detail":"Invalid email or password"}`
+— the API never reveals whether the email exists. Missing, expired or tampered
+tokens answer `401`; the wrong role answers `403`.
+
+### CORS origins
+
+The API allows **exactly** the origins in `CORS_ORIGINS` (comma-separated;
+default `http://localhost:5173`), with `Authorization` and `Content-Type` as
+allowed headers and `GET/POST/PATCH/OPTIONS` methods. Any other origin is
+rejected by the browser. On EC2 set it to the demo domain, e.g.
+`CORS_ORIGINS=https://<domain>` in SSM/deploy secrets.
+
 ## 1. What runs where
 
 | Piece | Where |
