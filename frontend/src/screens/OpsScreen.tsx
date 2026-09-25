@@ -75,7 +75,7 @@ export function OpsScreen() {
         <KpiCard
           label="Low confidence"
           value={`${metrics.lowConfidencePct}%`}
-          caption={`de ${metrics.lowConfidenceTotal} mensajes`}
+          caption={`of ${metrics.lowConfidenceTotal} messages`}
         />
         <KpiCard
           label="Stuck rescues"
@@ -94,7 +94,7 @@ export function OpsScreen() {
             values={metrics.costHistory}
             ariaLabel="Daily LLM cost"
             leftCaption="14 days ago"
-            rightCaption="hoy"
+            rightCaption="today"
           />
         </div>
         <div className="rounded-card bg-surface p-6 shadow-card">

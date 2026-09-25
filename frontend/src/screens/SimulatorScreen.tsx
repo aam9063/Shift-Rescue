@@ -84,12 +84,12 @@ export function SimulatorScreen() {
                   setDrafts((current) => ({ ...current, [conversation.employeeId]: event.target.value }))
                 }
                 placeholder="Message"
-                aria-label={`Mensaje para ${conversation.employeeName}`}
+                aria-label={`Message for ${conversation.employeeName}`}
                 className="min-w-0 flex-1 rounded-pill border border-black/10 bg-white px-3 py-2 text-sm tracking-tight"
               />
               <button
                 type="submit"
-                aria-label={`Enviar mensaje a ${conversation.employeeName}`}
+                aria-label={`Send message to ${conversation.employeeName}`}
                 className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95"
               >
                 <svg viewBox="0 0 16 16" className="size-4 fill-white" aria-hidden="true">
