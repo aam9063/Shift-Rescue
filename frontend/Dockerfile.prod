@@ -1,0 +1,25 @@
+# Production web image: builds the dashboard SPA and serves it with Caddy
+# together with the API reverse proxy (see infra/Caddyfile).
+#
+# Build context must be the REPOSITORY ROOT:
+#   docker build -f frontend/Dockerfile.prod -t shift-rescue-web .
+
+# --- Stage 1: build the SPA ---------------------------------------------------
+FROM node:24-alpine AS build
+
+RUN corepack enable
+WORKDIR /app
+
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY frontend/ ./
+RUN pnpm build
+
+# --- Stage 2: serve with Caddy (TLS + SPA + API proxy) ------------------------
+FROM caddy:2-alpine
+
+COPY infra/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/dist /srv
+
+EXPOSE 80 443
