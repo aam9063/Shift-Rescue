@@ -40,8 +40,8 @@ export function EvalsScreen() {
             values={evalRun.accuracyHistory}
             reference={evalRun.threshold}
             ariaLabel="Intent accuracy evolution"
-            leftCaption={`umbral ${evalRun.threshold}`}
-            rightCaption={`actual ${evalRun.latestAccuracy}`}
+            leftCaption={`threshold ${evalRun.threshold}`}
+            rightCaption={`current ${evalRun.latestAccuracy}`}
           />
           <h3 className="pt-2 text-base font-semibold tracking-tight">Per-scenario results</h3>
           <ul className="divide-y divide-black/5">

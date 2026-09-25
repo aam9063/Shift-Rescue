@@ -58,7 +58,7 @@ export function OpsScreen() {
         <KpiCard
           label="Low confidence"
           value={`${metrics.lowConfidencePct}%`}
-          caption={`de ${metrics.lowConfidenceTotal} mensajes`}
+          caption={`of ${metrics.lowConfidenceTotal} messages`}
         />
         <KpiCard
           label="Stuck rescues"

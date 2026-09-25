@@ -19,7 +19,7 @@ SPANISH = re.compile(
     r"desde|hasta)\b",
     re.IGNORECASE,
 )
-LITERAL = re.compile(r"'([^'\n]{3,})'|\"([^\"\n]{3,})\"")
+LITERAL = re.compile(r"'([^'\n]{3,})'|\"([^\"\n]{3,})\"|`([^`\n]{3,})`")
 SKIP_PREFIXES = ("*", "//", "import", "export type", "className", "@")
 WHATSAPP_CONTENT_FILE = "./services/dashboardMock.ts"
 
@@ -39,7 +39,7 @@ def main() -> None:
                 if line.strip().startswith(SKIP_PREFIXES):
                     continue
                 for match in LITERAL.finditer(line):
-                    value = match.group(1) or match.group(2) or ""
+                    value = match.group(1) or match.group(2) or match.group(3) or ""
                     if not SPANISH.search(value):
                         continue
                     findings += 1
