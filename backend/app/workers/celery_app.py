@@ -1,10 +1,12 @@
 """Celery application (spec §7.2: queues, waves, timeouts, retries).
 
-Foundation only registers a ping task; orchestration tasks arrive with
-`rescue-orchestration`.
+Celery beat owns time: it ticks the scheduler (`run-due-jobs`, every 5 s) and
+runs the daily retention purge. Orchestration runs in the worker process via
+`app.runtime` — the API process only enqueues tasks (spec §7.5).
 """
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import get_settings
 
@@ -25,6 +27,22 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
 )
+
+celery_app.conf.beat_schedule = {
+    "run-due-jobs": {
+        "task": "app.workers.tasks.run_due_jobs",
+        "schedule": 5.0,
+    },
+    "purge-old-messages": {
+        "task": "app.workers.tasks.purge_old_messages",
+        "schedule": crontab(hour=3, minute=0),  # daily, Europe/Madrid
+    },
+}
+
+# Import side effect: connect the worker tracing bootstrap (worker_process_init
+# / worker_process_shutdown). Every preforked child must install its own
+# TracerProvider — a provider inherited across a fork is not usable.
+import app.workers.tracing_bootstrap  # noqa: E402,F401
 
 
 @celery_app.task(name="app.workers.celery_app.ping")

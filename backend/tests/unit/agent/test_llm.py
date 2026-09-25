@@ -154,6 +154,44 @@ async def test_latency_falls_back_to_wall_clock_when_the_sdk_reports_zero() -> N
     assert (client.last_usage or {})["latency_ms"] > 0
 
 
+async def test_prompt_forwards_pending_confirmation_and_extra_context_keys() -> None:
+    agent = FakeAgent(structured_output=structured())
+    client = StrandsLLMClient(agent_factory=lambda: agent)
+
+    await client.interpret(
+        "1",
+        {
+            "rescue_id": "case_1",
+            "pending_confirmation": "shift_1",
+            "shifts_48h": ["shift_1 07:00-15:00"],
+            "channel_id": "wa_42",
+            "empty_note": "",
+            "empty_list": [],
+            "api_key": "sk-should-never-leak",
+        },
+    )
+
+    prompt = agent.prompts[0]
+    assert "[rescue_id=case_1]" in prompt
+    assert "[pending_confirmation=shift_1]" in prompt
+    assert "[shifts_48h=['shift_1 07:00-15:00']]" in prompt
+    assert "[channel_id=wa_42]" in prompt
+    assert "empty_note" not in prompt
+    assert "empty_list" not in prompt
+    assert "sk-should-never-leak" not in prompt
+
+
+async def test_prompt_keeps_validation_error_retry_line() -> None:
+    agent = FakeAgent(structured_output=structured())
+    client = StrandsLLMClient(agent_factory=lambda: agent)
+
+    await client.interpret("hola", {"validation_error": "bad format", "rescue_id": "c1"})
+
+    prompt = agent.prompts[0]
+    assert "[rescue_id=c1]" in prompt
+    assert "Tu respuesta anterior no fue válida: bad format" in prompt
+
+
 async def test_meters_legacy_snake_case_usage_shape() -> None:
     class LegacyMetrics:
         usage = {"input_tokens": 100, "output_tokens": 10}

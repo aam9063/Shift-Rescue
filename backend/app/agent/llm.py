@@ -165,15 +165,24 @@ class StrandsLLMClient:
 
     def _build_prompt(self, message_body: str, context: dict[str, Any]) -> str:
         lines = [message_body]
-        rescue_id = context.get("rescue_id")
-        if rescue_id:
-            lines.append(f"[rescue_id={rescue_id}]")
-        pending = context.get("pending_offers")
-        if pending:
-            lines.append(f"[pending_offers={pending}]")
-        shifts = context.get("shifts_48h")
-        if shifts:
-            lines.append(f"[shifts_48h={shifts}]")
+        for key in ("rescue_id", "pending_offers", "pending_confirmation", "shifts_48h"):
+            value = context.get(key)
+            if value:
+                lines.append(f"[{key}={value}]")
+        # The golden set and the orchestrator may carry extra context; drop
+        # nothing silently — render any remaining non-empty string/list. Keys
+        # that look like credentials are never forwarded (secrets stay out of
+        # prompts).
+        secret_hints = ("secret", "token", "password", "api_key", "authorization")
+        for key, value in context.items():
+            if key in ("rescue_id", "pending_offers", "pending_confirmation", "shifts_48h"):
+                continue
+            if key == "validation_error":
+                continue
+            if any(hint in key.lower() for hint in secret_hints):
+                continue
+            if isinstance(value, (str, list)) and value:
+                lines.append(f"[{key}={value}]")
         if context.get("validation_error"):
             lines.append(
                 f"[Tu respuesta anterior no fue válida: {context['validation_error']}. "

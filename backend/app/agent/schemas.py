@@ -31,4 +31,4 @@ class Interpretation(BaseModel):
     proposed_end: str | None = None
     contains_health_details: bool = False
     question_text: str | None = None
-    prompt_version: str = "interpreter_v1"
+    prompt_version: str = "interpreter_v2"

@@ -7,10 +7,10 @@ failures found while building the project and how they were fixed.
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit | `cd backend && uv run pytest` | **211 passed** |
+| Backend unit | `cd backend && uv run pytest` | **308 passed** |
 | Backend integration (real PostgreSQL) | `DATABASE_URL=... uv run pytest tests/integration -m integration` | **2 passed** |
 | Domain coverage gate (≥95%) | `uv run pytest --cov` | **100%** on `app/domain/` |
-| Frontend | `cd frontend && pnpm vitest run` | **81 passed** |
+| Frontend | `cd frontend && pnpm vitest run` | **83 passed** |
 | Lint / types | `ruff check`, `mypy app` (strict), `oxlint` | clean |
 | Scenarios (§8.2) | `make eval` | **14/14 green, 0 invariant violations** |
 
@@ -43,10 +43,23 @@ accepts, declines, 20 conditionals with time extraction ("las 7 y cuarto" →
 07:15), reports (with and without health details), retractions, withdrawals,
 ambiguous input, questions, smalltalk, manipulation attempts and English.
 
-| Provider | Intent accuracy | Notes |
-|---|---|---|
-| Deterministic parser (degraded mode, offline) | **0.3733** | informational floor; it only knows an explicit vocabulary |
-| Real model (`--provider interpreter`) | **pending** | needs `ANTHROPIC_API_KEY`; thresholds in `evals/thresholds.yaml` (intent ≥0.92, health ≥0.95, times ≥0.80) |
+| Provider / prompt | Intent accuracy | Health detection | Conditional times | Avg latency | Avg cost | Verdict |
+|---|---|---|---|---|---|---|
+| Deterministic parser (degraded mode, offline) | 0.3733 | 0.0 | 0.0 | — | — | informational floor; it only knows an explicit vocabulary |
+| Deterministic parser + context (offline) | 0.3733 | 0.0 | 0.0 | — | — | same run, kept for reference |
+| `gpt-4o-mini`, `interpreter_v1` | 0.86 | 0.9167 | 0.95 | 1051 ms | $0.000211 | **2 violations** (intent < 0.92, health < 0.95) |
+| `gpt-4o-mini`, `interpreter_v2` | **0.9333** | **1.0** | **0.85** | 1047 ms | $0.000298 | **thresholds met** (intent ≥ 0.92, health ≥ 0.95, times ≥ 0.80) |
+
+The v2 prompt added an explicit decision procedure keyed on the context the
+harness already supplies (`[pending_offers]` before `[pending_confirmation]`
+before "nothing pending"), numeric replies (`1` = yes, `2` = no) only when
+something is pending, a broader health rule (any symptom, malaise or medical
+reference), and worked examples for the confusions the v1 run exposed
+(`OFFER_ACCEPT` vs `ABSENCE_CONFIRM`, `OFFER_WITHDRAW` vs `OFFER_DECLINE`,
+`"xq no puedo ir hoy"` as a statement rather than a question).
+
+Run-to-run spread at temperature 0 is real but small (v1 measured 0.86 and 0.84
+in two consecutive runs); the prompt change is larger than that spread.
 
 The parser baseline is deliberately low: it exists so the product still works
 when the LLM is unavailable, not to replace it.
@@ -72,10 +85,43 @@ end to end rather than by unit tests alone.
 
 ## 5. Known gaps
 
-- The real-model interpreter run (accuracy thresholds) needs an API key; the
-  harness and thresholds are ready.
-- Celery beat should own the scheduled work in production (the lifespan ticker
-  covers the demo and restarts lose in-flight timers).
+### 5.1 The threshold gate silently passed for months
+
+`check_thresholds()` iterated hardcoded keys ending in `_min`/`_max`
+(`intent_accuracy_min`) while the report stored the values without the suffix
+(`intent_accuracy`), so `report.get(key)` returned `None` for every entry, every
+comparison was skipped and the runner printed **"Thresholds met."** while two
+thresholds were violated. `evals/thresholds.yaml` was never read at all.
+
+Fixed: thresholds now live in `backend/app/evals/thresholds.py`, read the YAML
+(single source of truth, max *and* min directions), and **fail closed** — an
+unmapped key, an unknown metric or a non-numeric value is a violation rather
+than a silent pass. Verified against the real v1 report, which now reports
+exactly the two violations it always had.
+
+### 5.2 `OFFER_WITHDRAW` is not inferable from the context the harness supplies
+
+Six of the ten remaining failures (`no puedo al final`, `imposible al final`,
+`tengo que cancelar`, `no podré ir`, `i need to cancel`) carry **the same
+context** as cases labelled `OFFER_DECLINE` and `OFFER_ACCEPT`:
+`{"pending_offers": ["offer_1"], ...}`. The golden set distinguishes them by
+wording alone, so the only way to match it is a lexical rule for the word
+"al final" — which would be prompt overfitting, not a real capability.
+
+The product fix is to put the missing fact in the context: when an employee has
+already accepted and now cancels, the orchestrator knows it, and the interpreter
+should receive that marker (e.g. `[accepted_offer=offer_1]`) so the distinction
+is state, not guesswork. Tracked as its own work unit; the remaining four
+failures are one accentless `"si"`, one colloquial `"allí estaré"`, one
+`QUESTION`/`SMALLTALK` boundary and one adversarial case (`"cancele el caso de
+todos"` → expected `UNCLEAR`).
+
+### 5.3 Scheduled work
+
+Celery beat owns the scheduled work (every 5 s `run-due-jobs`, daily retention
+purge). The in-memory `SimScheduler` still loses in-flight timers if the worker
+restarts, so wave deadlines survive a restart only once the schedule lives in
+the database.
 - The two-phone acceptance run needs a second WhatsApp number joined to the
   sandbox; everything else is verified live.
 - `make eval-models` (Anthropic vs Bedrock vs NaN comparison) is prepared but

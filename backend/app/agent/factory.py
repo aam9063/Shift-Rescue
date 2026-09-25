@@ -15,7 +15,7 @@ from typing import Any
 
 import structlog
 
-from app.agent.interpreter import MessageInterpreter
+from app.agent.interpreter import PROMPT_VERSION, MessageInterpreter
 from app.core.config import Settings
 
 logger = structlog.get_logger(__name__)
@@ -31,6 +31,16 @@ PROVIDER_DEFAULT_PRICES: dict[str, dict[str, float]] = {
     "openai": {"input": 0.00015, "output": 0.0006},
     "anthropic": {"input": 0.0008, "output": 0.004},
     "bedrock": {"input": 0.0008, "output": 0.004},
+}
+
+# Settings attribute and environment variable holding each provider credential.
+_CREDENTIAL_SETTINGS: dict[str, str] = {
+    "openai": "openai_api_key",
+    "anthropic": "anthropic_api_key",
+}
+_CREDENTIAL_ENV_VARS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
 }
 
 
@@ -62,11 +72,33 @@ def resolve_price(settings: Settings) -> dict[str, float]:
     return price
 
 
+def _missing_credential_reason(settings: Settings) -> str:
+    """Secret-free reason naming the missing credential variable."""
+    var = _CREDENTIAL_ENV_VARS.get(_provider(settings))
+    if var is None:
+        return f"Unknown llm_provider {_provider(settings)!r}"
+    return f"{var} is not set — add it to backend/.env"
+
+
+def is_provider_configured(settings: Settings) -> bool:
+    """Pure configuration check (ADR-004): provider enabled **and** its
+    credential present. Constructs nothing and performs no network call — the
+    single source of truth for "is the LLM path usable" (spec §9.3).
+    """
+    if not settings.llm_enabled:
+        return False
+    provider = _provider(settings)
+    if provider == "bedrock":
+        return True  # AWS credentials come from the instance role (ADR-004)
+    attr = _CREDENTIAL_SETTINGS.get(provider)
+    return bool(attr is not None and getattr(settings, attr))
+
+
 def _build_openai_model(settings: Settings, model_id: str) -> Any:
     from strands.models.openai import OpenAIModel
 
     if not settings.openai_api_key:
-        raise LLMNotConfiguredError("OPENAI_API_KEY is not set — add it to backend/.env")
+        raise LLMNotConfiguredError(_missing_credential_reason(settings))
     client_args: dict[str, str] = {"api_key": settings.openai_api_key}
     if settings.openai_base_url:
         client_args["base_url"] = settings.openai_base_url
@@ -84,7 +116,7 @@ def _build_anthropic_model(settings: Settings, model_id: str) -> Any:
     from strands.models.anthropic import AnthropicModel
 
     if not settings.anthropic_api_key:
-        raise LLMNotConfiguredError("ANTHROPIC_API_KEY is not set — add it to backend/.env")
+        raise LLMNotConfiguredError(_missing_credential_reason(settings))
     return AnthropicModel(
         model_id=model_id,
         max_tokens=settings.llm_max_tokens,
@@ -124,9 +156,13 @@ def build_model(settings: Settings) -> Any:
     return builder(settings, model_id)
 
 
-def load_system_prompt() -> str:
-    """Interpreter prompt (baked into the image with the app package)."""
-    return (Path(__file__).parent / "prompts" / "interpreter_v1.md").read_text(encoding="utf-8")
+def load_system_prompt(version: str = PROMPT_VERSION) -> str:
+    """Interpreter prompt (baked into the image with the app package).
+
+    Prompt edits ship as a new versioned file: the version is recorded on every
+    interpretation, so a quality change is always attributable to a prompt.
+    """
+    return (Path(__file__).parent / "prompts" / f"{version}.md").read_text(encoding="utf-8")
 
 
 def build_interpreter(settings: Settings) -> MessageInterpreter | None:
@@ -135,14 +171,16 @@ def build_interpreter(settings: Settings) -> MessageInterpreter | None:
     Never raises on the API path; never logs or returns a credential. A `None`
     result means the orchestrator answers with the deterministic parser.
     """
-    if not settings.llm_enabled:
-        logger.warning("llm_disabled", reason="provider is disabled")
+    if not is_provider_configured(settings):
+        reason = (
+            "provider is disabled"
+            if not settings.llm_enabled
+            else _missing_credential_reason(settings)
+        )
+        logger.warning("llm_disabled", reason=reason)
         return None
     try:
         model = build_model(settings)
-    except LLMNotConfiguredError as error:
-        logger.warning("llm_disabled", reason=str(error))
-        return None
     except (ImportError, ModuleNotFoundError):
         logger.warning("llm_disabled", reason="provider SDK is not installed")
         return None
@@ -164,7 +202,11 @@ def build_interpreter(settings: Settings) -> MessageInterpreter | None:
         model_id=model_id,
         price_per_1k=resolve_price(settings),
     )
-    return MessageInterpreter(llm=client, confidence_threshold=settings.llm_confidence_threshold)
+    return MessageInterpreter(
+        llm=client,
+        prompt_version=PROMPT_VERSION,
+        confidence_threshold=settings.llm_confidence_threshold,
+    )
 
 
 def describe_provider(settings: Settings) -> str:

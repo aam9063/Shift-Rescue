@@ -35,11 +35,13 @@ LLM_TIMEOUT_SECONDS=10
 LLM_CONFIDENCE_THRESHOLD=0.75
 ```
 
-Verify at boot: the API logs exactly one line
-`llm_path provider=openai model=gpt-4o-mini` (secret-free). When the provider is
-disabled or a credential is missing it logs `llm_disabled reason=...` and keeps
-answering with the deterministic parser — **that warning is the signal**, not an
-error. `LLM_PROVIDER=none` is the explicit kill switch for the LLM path.
+Verify at boot: the **worker** logs exactly one line
+`llm_path provider=openai model=gpt-4o-mini` (secret-free) — the worker process
+owns the orchestrator and the interpreter (the API only enqueues tasks). When
+the provider is disabled or a credential is missing it logs `llm_disabled
+reason=...` and keeps answering with the deterministic parser — **that warning
+is the signal**, not an error. `LLM_PROVIDER=none` is the explicit kill switch
+for the LLM path.
 
 ### 2.2 Langfuse Cloud (traces)
 
@@ -101,9 +103,27 @@ ssh -i <key.pem> ubuntu@<host> 'sudo bash /tmp/bootstrap-ec2.sh'
 ```bash
 curl -fsS https://<domain>/api/../health        # {"status":"ok"...}
 curl -fsS -o /dev/null -w '%{http_code}\n' https://<domain>/   # 200 (SPA)
-# Twilio: send "hola" from a joined phone; the API log must show
-#   twilio_inbound_received ... recognized=true
+# Twilio: send "hola" from a joined phone; the API answers instantly (200,
+#   log `twilio_inbound_received`), and the worker then logs
+#   `worker_inbound_processed ... recognized=true`
 ```
+
+The **worker and beat containers are required for the demo**: the API only
+enqueues the inbound task (spec §7.5), the worker runs the orchestration and
+the LLM, and beat ticks the scheduler (`run-due-jobs`, every 5 s) plus the
+daily retention purge. `docker compose ps` must show `api`, `worker`, `beat`,
+`redis` and `postgres` up.
+
+If a message gets no reply, check in this order:
+
+1. `logs api | grep twilio_inbound_received` — did the webhook arrive and pass
+   signature validation? A `500` line (`twilio_inbound_enqueue_failed`) means
+   the broker rejected the task: check `redis` is up (Twilio retries on 500).
+2. `logs worker | grep worker_inbound_processed` — did the worker pick it up?
+   If not, the worker is down or stuck: `docker compose logs worker`.
+3. `recognized=false` means the sender phone is not a seeded employee.
+4. `logs worker | grep llm_disabled` — the agent may be answering as the
+   deterministic parser (see §2.1).
 
 ## 5. Common operations
 
@@ -126,11 +146,13 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://<domain>/   # 200 (SPA)
 | Twilio webhook returns 403 | `TWILIO_AUTH_TOKEN` mismatch, or the request did not come through Caddy | re-run deploy (secrets), verify `X-Forwarded-*` are set by Caddy |
 | Twilio shows `12300` | webhook response without Content-Type | our endpoints answer TwiML; check the API version deployed |
 | Messages not delivered (`63015`) | recipient never joined the sandbox | have the employee send `join <code>` to the sandbox number |
-| Agent answers like the old parser (literal "SÍ"/"]" only) | `logs api \| grep llm_disabled` | fix the reason: missing `OPENAI_API_KEY`, `LLM_PROVIDER=none`, or the provider SDK not installed in the image (rebuild) |
+| Agent answers like the old parser (literal "SÍ"/"]" only) | `logs worker \| grep llm_disabled` | fix the reason: missing `OPENAI_API_KEY`, `LLM_PROVIDER=none`, or the provider SDK not installed in the image (rebuild) |
 | LLM cost rising unexpectedly | Langfuse traces, Ops screen | lower `LLM_MAX_TOKENS`, switch to a cheaper model, or set `LLM_PROVIDER=none` to stop spending |
 | No traces in Langfuse though the app works | `logs api \| grep tracing` | keys absent (logs `tracing_disabled`), wrong region host, or keys from another project |
 | `20003 Primary compliance profile` | Twilio Trust Hub profile `draft` | complete and submit the profile in Trust Hub |
-| Rescue stuck in OFFERING | `logs api \| grep scheduler` | the lifespan ticker drives timeouts; if the API was restarted mid-flight, re-run the flow (in-memory scheduler) |
+| Rescue stuck in OFFERING | `logs worker \| grep scheduler_ran_jobs` | the worker's scheduler drives timeouts (ticked by beat every 5 s); if the **worker** was restarted mid-flight, in-memory jobs were lost — re-run the flow |
+| Message gets no reply | see §4 checklist | API enqueues (`twilio_inbound_received`), worker processes (`worker_inbound_processed`); a `twilio_inbound_enqueue_failed` 500 means Redis/broker down — Twilio retries, recover Redis |
+| Timeouts/purge never fire | `docker compose ps` shows `beat` down | start beat: `docker compose up -d beat` — beat owns `run-due-jobs` (every 5 s) and the daily purge |
 | DB full / slow | `df -h`, `docker system df` | prune images (`docker image prune -f`), grow the EBS volume |
 
 ## 7. Rollback

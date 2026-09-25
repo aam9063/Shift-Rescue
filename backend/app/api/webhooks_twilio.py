@@ -1,23 +1,23 @@
 """Twilio WhatsApp webhooks (spec §7.5).
 
-Inbound: validate the request signature, map the sender phone to an employee
-and hand the message to the orchestrator — fast, no LLM work here (§7.4).
-Status: update delivery status by provider message id.
+Inbound: validate the request signature, parse the form and enqueue the
+orchestration task — no orchestrator, interpreter or LLM in this process
+(spec §7.4). Status: update delivery status by provider message id (DB only).
 """
-
-from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.factory import build_interpreter, describe_provider
 from app.channels.twilio_whatsapp import validate_twilio_signature
 from app.core.config import get_settings
 from app.observability.redaction import mask_phone
+from app.workers.tasks import process_inbound_message
 
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio"])
+
+logger = structlog.get_logger(__name__)
 
 # Twilio requires a Content-Type on every webhook response (error 12300
 # otherwise); empty TwiML acknowledges without replying.
@@ -47,40 +47,26 @@ def public_url(request: Request) -> str:
     return url
 
 
-class TwilioInboundService:
-    """Maps provider messages to the domain; unknown senders are ignored."""
+async def _validated_params(request: Request) -> dict[str, str] | None:
+    """Parse the form and check the Twilio signature; None when forged."""
+    settings = get_settings()
+    form = await request.form()
+    params = {key: str(value) for key, value in form.items()}
+    if settings.twilio_validate_signature and not validate_twilio_signature(
+        settings.twilio_auth_token,
+        public_url(request),
+        params,
+        request.headers.get("X-Twilio-Signature"),
+    ):
+        return None
+    return params
 
-    def __init__(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        orchestrator: Any,
-        scheduler: Any = None,
-    ) -> None:
+
+class TwilioStatusService:
+    """DB-only delivery-status updates; no orchestration in the API process."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
-        self._orchestrator = orchestrator
-        # Exposed so the app lifespan can drive due jobs while Celery wiring
-        # lands (see the resilience / deploy features).
-        self.scheduler = scheduler
-
-    async def handle(self, from_phone: str, message_sid: str, body: str) -> bool:
-        from app.db.models import Employee
-
-        async with self._sessions() as session:
-            employee = (
-                await session.execute(
-                    select(Employee).where(Employee.phone_e164 == from_phone)
-                )
-            ).scalar_one_or_none()
-        if employee is None:
-            return False
-
-        await self._orchestrator.handle_inbound(
-            conversation_id=f"conv_twilio_{from_phone}",
-            employee_id=employee.id,
-            provider_message_id=message_sid,
-            text=body,
-        )
-        return True
 
     async def update_status(self, message_sid: str, status: str) -> None:
         from app.db.models import Message
@@ -97,62 +83,18 @@ class TwilioInboundService:
             await session.commit()
 
 
-_service: TwilioInboundService | None = None
+def get_status_service() -> TwilioStatusService:
+    """DB-only status service (overridable in tests)."""
+    from app.db.session import create_engine_and_session
 
-
-def get_twilio_service() -> TwilioInboundService:
-    """Runtime wiring: DB sessions + the shared orchestrator (overridable)."""
-    global _service
-    if _service is None:
-        from app.channels.twilio_whatsapp import TwilioWhatsAppChannel
-        from app.db.session import create_engine_and_session
-        from app.integrations.workforce.mock import MockWorkforceAdapter
-        from app.services.orchestrator import RescueOrchestrator
-        from app.workers.scheduler import SimScheduler
-
-        settings = get_settings()
-        engine, session_factory = create_engine_and_session()
-        channel = TwilioWhatsAppChannel(
-            account_sid=settings.twilio_account_sid,
-            auth_token=settings.twilio_auth_token,
-            from_number=settings.twilio_whatsapp_from,
-        )
-        scheduler = SimScheduler()
-        interpreter = build_interpreter(settings)
-        orchestrator = RescueOrchestrator(
-            session_factory=session_factory,
-            workforce=MockWorkforceAdapter(session_factory),
-            channel=channel,
-            scheduler=scheduler,
-            clock=__import__("app.core.clock", fromlist=["SystemClock"]).SystemClock(),
-            interpreter=interpreter,
-        )
-        for name, handler in orchestrator.task_handlers().items():
-            scheduler.register(name, handler)
-        _service = TwilioInboundService(session_factory, orchestrator, scheduler)
-        structlog.get_logger(__name__).info(
-            "llm_path",
-            active=interpreter is not None,
-            detail=describe_provider(settings),
-        )
-    return _service
+    _, session_factory = create_engine_and_session()
+    return TwilioStatusService(session_factory)
 
 
 @router.post("/inbound")
-async def twilio_inbound(
-    request: Request,
-    service: TwilioInboundService = Depends(get_twilio_service),
-) -> Response:
-    settings = get_settings()
-    form = await request.form()
-    params = {key: str(value) for key, value in form.items()}
-
-    if settings.twilio_validate_signature and not validate_twilio_signature(
-        settings.twilio_auth_token,
-        public_url(request),
-        params,
-        request.headers.get("X-Twilio-Signature"),
-    ):
+async def twilio_inbound(request: Request) -> Response:
+    params = await _validated_params(request)
+    if params is None:
         return Response(status_code=403)
 
     message_sid = params.get("MessageSid", "")
@@ -163,35 +105,34 @@ async def twilio_inbound(
         return Response(status_code=400)
 
     # Operational trace: which sandbox called us and who wrote (phone masked).
-    structlog.get_logger(__name__).info(
+    logger.info(
         "twilio_inbound_received",
         sandbox=to_sandbox,
         sender=mask_phone(from_phone),
         message_sid=message_sid,
     )
 
-    handled = await service.handle(from_phone, message_sid, body)
-    structlog.get_logger(__name__).info(
-        "twilio_inbound_handled", sandbox=to_sandbox, recognized=handled
-    )
+    # Enqueue and answer immediately; the worker does the thinking (§7.5).
+    # A broker rejection must be loud: 500 makes Twilio retry the delivery.
+    try:
+        process_inbound_message.delay(from_phone, message_sid, body)
+    except Exception as error:
+        logger.error(
+            "twilio_inbound_enqueue_failed",
+            message_sid=message_sid,
+            error=str(error)[:200],
+        )
+        return Response(status_code=500)
     return _ack()
 
 
 @router.post("/status")
 async def twilio_status(
     request: Request,
-    service: TwilioInboundService = Depends(get_twilio_service),
+    service: TwilioStatusService = Depends(get_status_service),
 ) -> Response:
-    settings = get_settings()
-    form = await request.form()
-    params = {key: str(value) for key, value in form.items()}
-
-    if settings.twilio_validate_signature and not validate_twilio_signature(
-        settings.twilio_auth_token,
-        public_url(request),
-        params,
-        request.headers.get("X-Twilio-Signature"),
-    ):
+    params = await _validated_params(request)
+    if params is None:
         return Response(status_code=403)
 
     message_sid = params.get("MessageSid", "")
