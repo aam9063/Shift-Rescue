@@ -4,9 +4,11 @@ import type {
   RescueCase,
   RescueDetail,
   Shift,
+  SimulatorEmployee,
 } from '../domain/types'
 import type {
   AgentDecision,
+  ChatMessage,
   Conversation,
   LocationSettings,
   OpsMetrics,
@@ -251,4 +253,49 @@ export async function saveSettings(next: LocationSettings): Promise<LocationSett
 /** Public endpoint: the degraded-mode banner works without a session. */
 export function fetchSystemStatus(): Promise<SystemStatus> {
   return apiFetch<SystemStatus>('/api/status')
+}
+
+// --- Demo simulator (spec §7.5/§7.6) ------------------------------------------
+
+interface DemoClockWire {
+  now: string
+  offsetSeconds: number
+}
+
+/** The roster for the Simulator screen: real employees with today's shift
+ * and their conversation id (`GET /api/employees?location_id=`). */
+export async function fetchSimulatorEmployees(): Promise<SimulatorEmployee[]> {
+  const locationId = await getLocationId()
+  return apiFetch<SimulatorEmployee[]>(`/api/employees?location_id=${locationId}`)
+}
+
+/** The real thread of one conversation (redacted bodies, spec §10). */
+export async function fetchConversationThread(conversationId: string): Promise<ChatMessage[]> {
+  const messages = await apiFetch<ChatMessageWire[]>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
+  )
+  return messages.map((message) => ({ from: message.from, text: message.text }))
+}
+
+/** Send a message as an employee through the real pipeline: the API enqueues
+ * the same task the Twilio webhook enqueues and answers 202. */
+export async function sendSimulatorMessage(employeeId: string, text: string): Promise<string> {
+  const ack = await apiFetch<MutationAcceptedWire>(
+    `/dev/simulator/${encodeURIComponent(employeeId)}/messages`,
+    { method: 'POST', body: JSON.stringify({ text }) },
+  )
+  return ack.id
+}
+
+/** Current virtual time and shared offset (`GET /dev/clock`). */
+export async function fetchDemoClock(): Promise<DemoClockWire> {
+  return apiFetch<DemoClockWire>('/dev/clock')
+}
+
+/** Move the shared demo clock; the backend also enqueues the reconcile sweep. */
+export async function advanceDemoClock(seconds: number): Promise<DemoClockWire> {
+  return apiFetch<DemoClockWire>('/dev/clock/advance', {
+    method: 'POST',
+    body: JSON.stringify({ seconds }),
+  })
 }

@@ -66,4 +66,27 @@ def require_role(*allowed_roles: str) -> Callable[[ManagerPrincipal], Awaitable[
 
 # Re-exported so routers (and tests) import one consistent session dependency.
 get_db = get_session
-__all__ = ["ManagerPrincipal", "current_manager", "get_db", "require_role"]
+
+
+async def require_demo_environment(
+    settings: Settings = Depends(get_settings),
+) -> Settings:
+    """Hard 404 outside demo environments (spec §7.5, decision 2).
+
+    The dev routes are also not registered in production (`create_app` skips
+    the router), so this dependency is the second gate: it protects against a
+    settings change after startup and keeps the routes unadvertised and
+    unusable outside `local`/`test`/`demo`.
+    """
+    if not settings.demo_clock_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return settings
+
+
+__all__ = [
+    "ManagerPrincipal",
+    "current_manager",
+    "get_db",
+    "require_demo_environment",
+    "require_role",
+]

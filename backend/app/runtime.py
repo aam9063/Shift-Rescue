@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.factory import build_interpreter, describe_provider
 from app.agent.interpreter import MessageInterpreter
 from app.channels.twilio_whatsapp import TwilioWhatsAppChannel
-from app.core.clock import SystemClock
+from app.core.clock import Clock, DemoClock, SystemClock, redis_offset_source
 from app.core.config import Settings, get_settings
 from app.db.session import create_engine_and_session
 from app.integrations.workforce.mock import MockWorkforceAdapter
@@ -37,7 +37,7 @@ class RescueRuntime:
     session_factory: async_sessionmaker[AsyncSession]
     channel: TwilioWhatsAppChannel
     workforce: MockWorkforceAdapter
-    clock: SystemClock
+    clock: Clock
     scheduler: Scheduler
     orchestrator: RescueOrchestrator
     interpreter: MessageInterpreter | None
@@ -98,7 +98,17 @@ def build_runtime(settings: Settings, *, scheduler: Scheduler | None = None) -> 
         auth_token=settings.twilio_auth_token,
         from_number=settings.twilio_whatsapp_from,
     )
-    clock = SystemClock()
+    # Demo environments share one Redis-backed offset (spec §7.5, decision 3):
+    # the API's `/dev/clock/advance` moves it and this worker follows. Redis
+    # clients connect lazily, so building it here stays hermetic; a read
+    # failure inside `DemoClock.now()` degrades to real time with a warning.
+    clock: Clock
+    if settings.demo_clock_enabled:
+        from redis import Redis
+
+        clock = DemoClock(redis_offset_source(Redis.from_url(settings.redis_url)))
+    else:
+        clock = SystemClock()
     if scheduler is None:
         backend = settings.scheduler_backend
         if backend == "celery":

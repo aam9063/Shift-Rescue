@@ -10,6 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.approvals import router as approvals_router
 from app.api.auth import router as auth_router
 from app.api.conversations import router as conversations_router
+from app.api.dev_tools import router as dev_tools_router
+from app.api.employees import router as employees_router
 from app.api.health import router as health_router
 from app.api.interpretations import router as interpretations_router
 from app.api.locations import router as locations_router
@@ -61,5 +63,11 @@ def create_app() -> FastAPI:
     app.include_router(approvals_router)
     app.include_router(conversations_router)
     app.include_router(interpretations_router)
+    app.include_router(employees_router)
+    # Demo-only dev routes (spec §7.5, decision 2): not even advertised —
+    # the router is registered only in demo environments, and the routes
+    # still answer a hard 404 if the environment changes under them.
+    if settings.demo_clock_enabled:
+        app.include_router(dev_tools_router)
     app.include_router(metrics_router)
     return app

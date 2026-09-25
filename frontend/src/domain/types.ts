@@ -132,3 +132,17 @@ export interface ApprovalRequest {
     detail?: string
   }
 }
+
+/* Demo simulator (spec §7.5/§7.6): the roster the Simulator screen renders. */
+
+export interface SimulatorEmployee {
+  id: string
+  displayName: string
+  roles: string[]
+  /** Today's first shift window and status; null when not scheduled today. */
+  shiftStartsAt: string | null
+  shiftEndsAt: string | null
+  shiftStatus: string | null
+  /** The employee's real conversation; null until the first message. */
+  conversationId: string | null
+}

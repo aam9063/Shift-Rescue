@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from structlog.testing import capture_logs
 
 import app.runtime as runtime_module
-from app.core.clock import SystemClock
+from app.core.clock import DemoClock, SystemClock
 from app.core.config import Settings, get_settings
 from app.db.models import Base, Employee
 from app.runtime import RescueRuntime, build_runtime, reset_worker_runtime
@@ -172,6 +172,25 @@ def test_build_runtime_honours_an_injected_scheduler() -> None:
 def test_build_runtime_rejects_an_unknown_backend() -> None:
     with pytest.raises(ValueError, match="scheduler_backend"), capture_logs():
         build_runtime(make_settings(llm_provider="none", scheduler_backend="redis"))
+
+
+# --- demo clock selection (spec §7.5, ADR-004 wiring) --------------------------
+
+
+def test_build_runtime_uses_the_demo_clock_in_demo_environments() -> None:
+    """Demo environments share the Redis-backed offset; the client is lazy,
+    so building the runtime stays hermetic (no Redis connection is made)."""
+    with capture_logs():
+        runtime = build_runtime(make_settings(llm_provider="none", app_env="demo"))
+
+    assert isinstance(runtime.clock, DemoClock)
+
+
+def test_build_runtime_keeps_the_system_clock_outside_demo() -> None:
+    with capture_logs():
+        runtime = build_runtime(make_settings(llm_provider="none", app_env="production"))
+
+    assert isinstance(runtime.clock, SystemClock)
 
 
 def test_runtime_circuit_open_is_false_without_interpreter() -> None:

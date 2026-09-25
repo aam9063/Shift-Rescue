@@ -67,6 +67,16 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
+    def demo_clock_enabled(self) -> bool:
+        """True in demo environments (spec §7.5): local, test or demo.
+
+        Gates the demo simulator: `/dev/*` routes exist only when this is on,
+        and the worker builds a shared-offset `DemoClock` instead of the
+        system clock. Production never sees either.
+        """
+        return self.app_env.strip().lower() in {"local", "test", "demo"}
+
+    @property
     def llm_enabled(self) -> bool:
         """True unless the provider is explicitly turned off."""
         return self.llm_provider.strip().lower() not in {"", "none", "disabled"}

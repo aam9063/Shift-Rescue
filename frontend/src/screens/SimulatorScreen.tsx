@@ -1,38 +1,108 @@
-import { useState } from 'react'
-import { useConversations } from '../services/dashboard'
+import { useState, type FormEvent } from 'react'
+import type { SimulatorEmployee } from '../domain/types'
+import { useDemoClock, useDemoEmployees, useDemoThread, useSendDemoMessage } from '../services/dashboard'
 
-const DEMO_CLOCK_START = '15:11'
+const CLOCK_PRESETS = [
+  { label: '+10 min', seconds: 600 },
+  { label: '+1h', seconds: 3600 },
+]
+
+function initials(name: string): string {
+  return (
+    name
+      .split(' ')
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
+  )
+}
 
 /**
- * Demo simulator (spec §7.6 screen 6, mockup "Simulador de demo"): phone
- * frames of the fictional employees with WhatsApp-style chats, a simulated
- * clock and predefined scenarios.
+ * One employee phone (spec §7.6, mockup "Simulador de demo"): the employee's
+ * real conversation thread with a "send as this employee" action. In live
+ * mode the message travels the same pipeline as a real WhatsApp message.
  */
-export function SimulatorScreen() {
-  const { conversations } = useConversations()
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [threads, setThreads] = useState<Record<string, { from: 'employee' | 'assistant'; text: string }[]>>(
-    () => Object.fromEntries(conversations.map((c) => [c.employeeId, [...c.messages]])),
-  )
-  const [clock, setClock] = useState(DEMO_CLOCK_START)
+function EmployeePhone({ employee }: { employee: SimulatorEmployee }) {
+  const { messages } = useDemoThread(employee.conversationId)
+  const { send } = useSendDemoMessage()
+  const [draft, setDraft] = useState('')
 
-  const send = (employeeId: string) => {
-    const text = (drafts[employeeId] ?? '').trim()
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const text = draft.trim()
     if (!text) {
       return
     }
-    setThreads((current) => ({
-      ...current,
-      [employeeId]: [...(current[employeeId] ?? []), { from: 'employee', text }],
-    }))
-    setDrafts((current) => ({ ...current, [employeeId]: '' }))
+    send(employee.id, employee.conversationId, text)
+    setDraft('')
   }
 
-  const advance = (minutes: number) => {
-    const [h, m] = clock.split(':').map(Number)
-    const total = h * 60 + m + minutes
-    setClock(`${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`)
-  }
+  return (
+    <div className="flex h-[480px] flex-col rounded-card border-4 border-green-house bg-neutral-cool">
+      <div className="flex items-center gap-3 border-b border-black/10 px-4 py-3">
+        <span className="flex size-9 items-center justify-center rounded-full bg-green-accent text-sm font-bold text-white">
+          {initials(employee.displayName)}
+        </span>
+        <div>
+          <p className="text-base font-semibold tracking-tight">{employee.displayName}</p>
+          <p className="text-xs tracking-tight text-text-secondary">
+            {employee.roles.length > 0 ? employee.roles.join(' · ') : 'Demo phone'}
+            {employee.shiftStartsAt !== null && employee.shiftEndsAt !== null
+              ? ` · ${employee.shiftStartsAt.slice(11, 16)}–${employee.shiftEndsAt.slice(11, 16)}`
+              : ''}
+            {employee.shiftStatus !== null ? ` (${employee.shiftStatus})` : ''}
+          </p>
+        </div>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto p-3" aria-label={`Thread of ${employee.displayName}`}>
+        {messages.map((message, index) => (
+          <div
+            key={index}
+            className={`max-w-[90%] rounded-card px-3 py-2 text-sm tracking-tight ${
+              message.from === 'assistant'
+                ? 'ml-auto bg-green-light text-green-house'
+                : 'bg-white text-text-primary'
+            }`}
+          >
+            {message.text}
+          </div>
+        ))}
+      </div>
+      <form
+        className="flex items-center gap-2 border-t border-black/10 p-3"
+        onSubmit={submit}
+      >
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="Message"
+          aria-label={`Message for ${employee.displayName}`}
+          className="min-w-0 flex-1 rounded-pill border border-black/10 bg-white px-3 py-2 text-sm tracking-tight"
+        />
+        <button
+          type="submit"
+          aria-label={`Send message to ${employee.displayName}`}
+          className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95"
+        >
+          <svg viewBox="0 0 16 16" className="size-4 fill-white" aria-hidden="true">
+            <path d="M1 8 15 1 9.5 15 7.8 9.2 1 8Z" />
+          </svg>
+        </button>
+      </form>
+    </div>
+  )
+}
+
+/**
+ * Demo simulator (spec §7.6 screen 6): phone frames of the real employees
+ * with WhatsApp-style chats, the shared demo clock, and the honest
+ * limitation spelled out — broker timers follow real time, deadlines and
+ * escalations follow the demo clock.
+ */
+export function SimulatorScreen() {
+  const { employees } = useDemoEmployees()
+  const { time, advance } = useDemoClock()
 
   return (
     <div className="space-y-6">
@@ -46,80 +116,29 @@ export function SimulatorScreen() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {conversations.slice(0, 3).map((conversation) => (
-          <div
-            key={conversation.employeeId}
-            className="flex h-[480px] flex-col rounded-card border-4 border-green-house bg-neutral-cool"
-          >
-            <div className="flex items-center gap-3 border-b border-black/10 px-4 py-3">
-              <span className="flex size-9 items-center justify-center rounded-full bg-green-accent text-sm font-bold text-white">
-                {conversation.initials}
-              </span>
-              <p className="text-base font-semibold tracking-tight">{conversation.employeeName}</p>
-            </div>
-            <div className="flex-1 space-y-2 overflow-y-auto p-3">
-              {(threads[conversation.employeeId] ?? []).map((message, index) => (
-                <div
-                  key={index}
-                  className={`max-w-[90%] rounded-card px-3 py-2 text-sm tracking-tight ${
-                    message.from === 'assistant'
-                      ? 'ml-auto bg-green-light text-green-house'
-                      : 'bg-white text-text-primary'
-                  }`}
-                >
-                  {message.text}
-                </div>
-              ))}
-            </div>
-            <form
-              className="flex items-center gap-2 border-t border-black/10 p-3"
-              onSubmit={(event) => {
-                event.preventDefault()
-                send(conversation.employeeId)
-              }}
-            >
-              <input
-                value={drafts[conversation.employeeId] ?? ''}
-                onChange={(event) =>
-                  setDrafts((current) => ({ ...current, [conversation.employeeId]: event.target.value }))
-                }
-                placeholder="Message"
-                aria-label={`Message for ${conversation.employeeName}`}
-                className="min-w-0 flex-1 rounded-pill border border-black/10 bg-white px-3 py-2 text-sm tracking-tight"
-              />
-              <button
-                type="submit"
-                aria-label={`Send message to ${conversation.employeeName}`}
-                className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95"
-              >
-                <svg viewBox="0 0 16 16" className="size-4 fill-white" aria-hidden="true">
-                  <path d="M1 8 15 1 9.5 15 7.8 9.2 1 8Z" />
-                </svg>
-              </button>
-            </form>
-          </div>
+        {employees.slice(0, 3).map((employee) => (
+          <EmployeePhone key={employee.id} employee={employee} />
         ))}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-card bg-surface px-4 py-3 shadow-card">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm tracking-tight text-text-secondary">
-            Simulated clock: <span className="font-semibold text-text-primary">{clock}</span>
+            Demo clock: <span className="font-semibold text-text-primary">{time ?? '--:--'}</span>
           </span>
-          <button
-            type="button"
-            onClick={() => advance(10)}
-            className="cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white active:scale-95"
-          >
-            +10 min
-          </button>
-          <button
-            type="button"
-            onClick={() => advance(60)}
-            className="cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white active:scale-95"
-          >
-            +1h
-          </button>
+          {CLOCK_PRESETS.map((preset) => (
+            <button
+              key={preset.seconds}
+              type="button"
+              onClick={() => advance(preset.seconds)}
+              className="cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white active:scale-95"
+            >
+              {preset.label}
+            </button>
+          ))}
+          <p className="w-full text-xs tracking-tight text-text-secondary">
+            Broker timers keep their real-time ETA; deadlines and escalations follow the demo clock.
+          </p>
         </div>
         <button
           type="button"
