@@ -1,0 +1,98 @@
+name: Deploy demo
+
+# Builds both images, pushes them to ECR and deploys on the EC2 instance.
+# Auth is OIDC (no long-lived AWS keys in the repository).
+#
+# Required repository secrets:
+#   AWS_DEPLOY_ROLE_ARN  role assumed via OIDC (trusts this repo's main branch)
+#   EC2_HOST             Elastic IP (or sslip.io hostname point: same IP)
+#   EC2_USER             ssh user (ubuntu)
+#   EC2_SSH_KEY          private key allowed to log into the instance
+#
+# Optional repository variables: AWS_REGION (default eu-west-1).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
+  ECR_API_REPO: shift-rescue-api
+  ECR_WEB_REPO: shift-rescue-web
+  APP_DIR: /opt/shift-rescue
+
+jobs:
+  deploy:
+    name: Build, push and deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve ECR registry
+        id: ecr
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "registry=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${{ steps.ecr.outputs.registry }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_API_REPO }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_API_REPO }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push web image (SPA + Caddy)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_WEB_REPO }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_WEB_REPO }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Copy compose stack to the instance
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "infra/docker-compose.prod.yml,infra/Caddyfile,infra/deploy/remote-deploy.sh"
+          target: ${{ env.APP_DIR }}
+          strip_components: 1
+
+      - name: Deploy on the instance
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            chmod +x ${{ env.APP_DIR }}/deploy/remote-deploy.sh
+            ${{ env.APP_DIR }}/deploy/remote-deploy.sh "${{ github.sha }}"
