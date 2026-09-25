@@ -11,10 +11,11 @@ name: Deploy demo
 #
 # Optional repository variables: AWS_REGION (default eu-west-1).
 
+# Manual by design: the demo instance is provisioned on demand (ADR-003 keeps
+# the cost under control). Re-add `push: branches: [main]` once the instance,
+# the Elastic IP and the repository secrets below are in place.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   id-token: write
@@ -32,6 +33,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check deployment configuration
+        env:
+          DEPLOY_ROLE: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          missing=""
+          [ -z "$DEPLOY_ROLE" ] && missing="$missing AWS_DEPLOY_ROLE_ARN"
+          [ -z "$HOST" ] && missing="$missing EC2_HOST"
+          [ -z "$USER" ] && missing="$missing EC2_USER"
+          [ -z "$SSH_KEY" ] && missing="$missing EC2_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Deployment is not provisioned yet. Missing repository secrets:$missing"
+            echo "See docs/runbook.md and odd/tasks/deploy-delivery.md (launch the EC2 instance first)."
+            exit 1
+          fi
+          echo "Deployment configuration present."
+
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
