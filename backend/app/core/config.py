@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-secret"
     demo_real_phones: str | None = None  # "Name:+346...|Name:+346..." (max 3, sandbox)
 
+    # Twilio WhatsApp (docs/twilio-sandbox-setup.md)
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_whatsapp_from: str = "whatsapp:+14155238886"  # sandbox default
+    twilio_validate_signature: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

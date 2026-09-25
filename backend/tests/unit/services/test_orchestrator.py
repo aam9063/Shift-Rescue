@@ -34,6 +34,15 @@ async def test_absence_report_sends_confirmation_and_no_case_yet(world, db, now)
     confirms = [m for m in world.channel.sent if m["template_key"] == "absence_confirm"]
     assert len(confirms) == 1
     assert confirms[0]["to"] == "+34600000001"
+
+    # The confirmation is persisted so the dashboard can show the conversation.
+    async with db() as session:
+        persisted = (
+            await session.execute(
+                select(Message).where(Message.template_key == "absence_confirm")
+            )
+        ).scalars().all()
+    assert len(persisted) == 1
     # No manager notification and no offers before explicit confirmation.
     assert not [m for m in world.channel.sent if m["to"] == "+34600999001"]
     assert not [m for m in world.channel.sent if m["template_key"] == "offer"]
@@ -99,8 +108,14 @@ async def test_duplicate_provider_message_is_processed_once(world, db) -> None:
 
 
     async with db() as session:
-        count = (await session.execute(select(func.count()).select_from(Message))).scalar_one()
-    assert count == 1
+        inbound = (
+            await session.execute(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.direction == "inbound")
+            )
+        ).scalar_one()
+    assert inbound == 1  # the duplicate provider message was ignored
     assert len([m for m in world.channel.sent if m["template_key"] == "absence_confirm"]) == 1
 
 
@@ -164,3 +179,58 @@ async def test_health_details_are_redacted_before_persisting(world, db) -> None:
     inbound = [m for m in messages if m.direction == "inbound"]
     assert inbound[0].body_redacted == "[redacted: health details]"
     assert "migraña" not in inbound[0].body_redacted
+
+
+async def test_in_progress_shift_is_found_even_if_it_started_hours_ago(world, db, now) -> None:
+    """spec §5.3: a shift already running can be covered for the remainder."""
+    from sqlalchemy import select
+
+    from app.db.models import Shift
+
+    async with db() as session:
+        shift = (await session.execute(select(Shift).where(Shift.id == "shift_1"))).scalar_one()
+        shift.starts_at = now - timedelta(hours=6)
+        shift.ends_at = now + timedelta(hours=2)
+        await session.commit()
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+
+    assert world.channel.with_template("absence_confirm"), "in-progress shift not found"
+    assert not world.channel.with_template("out_of_scope")
+
+
+async def test_every_persisted_id_fits_the_database_column_width(world, db) -> None:
+    """Postgres columns are VARCHAR(64): composed ids must never exceed it
+    (a longer id rolled back the whole confirmation transaction once)."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="sí",
+    )
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditEvent, Message, Offer, RescueCase
+
+    async with db() as session:
+        ids: list[str] = []
+        ids += [row.id for row in (await session.execute(select(RescueCase))).scalars()]
+        ids += [row.id for row in (await session.execute(select(Offer))).scalars()]
+        ids += [row.id for row in (await session.execute(select(Message))).scalars()]
+        ids += [row.id for row in (await session.execute(select(AuditEvent))).scalars()]
+
+    assert ids, "expected persisted rows"
+    too_long = [i for i in ids if len(i) > 64]
+    assert too_long == [], f"ids exceeding VARCHAR(64): {too_long}"

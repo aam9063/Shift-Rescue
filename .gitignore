@@ -6,9 +6,33 @@ node_modules/
 dist/
 coverage/
 *.local
+
+# Environment files — policy: never commit real secrets.
+# The dotted names are ignored; the `*.example` templates ARE committed.
 .env
 .env.*
 !.env.example
 
+# Python bytecode leaked outside backend/ (kept here as a safety net)
+__pycache__/
+*.py[codz]
+
 # Logs
 *.log
+
+# CodeGraph index (local tooling)
+.codegraph/
+
+# Playwright artifacts (frontend e2e, spec Feature 5/8)
+test-results/
+playwright-report/
+playwright/.cache/
+
+# OS noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local editor state
+.idea/
+.vscode/

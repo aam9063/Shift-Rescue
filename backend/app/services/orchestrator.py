@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -39,7 +40,7 @@ from app.domain.quiet_hours import next_quiet_end, offers_allowed
 from app.domain.ranking import RankedCandidate, rank_candidates
 from app.domain.state_machine import SideEffect, State, StateMachineEvent, transition
 from app.integrations.workforce.mock import MockWorkforceAdapter
-from app.observability.redaction import redact_if_health
+from app.observability.redaction import mask_phone, redact_if_health
 from app.ports import Channel, Scheduler
 
 WAVE_SIZE = 3
@@ -238,7 +239,7 @@ class RescueOrchestrator:
             offer.requires_approval = True
             session.add(
                 ApprovalRequest(
-                    id=f"appr_cond_{offer.id}",
+                    id=f"appr_{uuid4().hex}",
                     rescue_id=case.id,
                     offer_id=offer.id,
                     kind="partial_coverage",
@@ -315,7 +316,7 @@ class RescueOrchestrator:
             await self._get_or_create_conversation(session, conversation_id, employee_id)
             session.add(
                 Message(
-                    id=f"msg_in_{provider_message_id}",
+                    id=f"msg_{uuid4().hex}",
                     conversation_id=conversation_id,
                     direction="inbound",
                     provider_message_id=provider_message_id,
@@ -372,10 +373,11 @@ class RescueOrchestrator:
         target = shifts[0]
         deadline = self._deadline_for(now, target)
 
+        case_id = f"case_{uuid4().hex}"
         async with self._sessions() as session:
             session.add(
                 RescueCase(
-                    id=f"case_{target.id}_{int(now.timestamp())}",
+                    id=case_id,
                     location_id=target.location_id,
                     shift_id=target.id,
                     absent_employee_id=employee_id,
@@ -399,6 +401,7 @@ class RescueOrchestrator:
         await self._send_template(
             to=self._phone_of(employee),
             template_key="absence_confirm",
+            conversation_id=conversation_id,
             employee_name=employee["full_name"],
             role=self._role_label(target.role),
             start=self._fmt(target.starts_at),
@@ -406,9 +409,6 @@ class RescueOrchestrator:
         )
 
     async def _handle_confirmation(self, conversation_id: str, employee_id: str) -> None:
-        import os
-        if os.getenv("ORCH_DEBUG"):
-            print("DEBUG confirmation entered")
         now = self._clock.now()
         async with self._sessions() as session:
             case = (
@@ -422,13 +422,9 @@ class RescueOrchestrator:
                 )
             ).scalars().first()
             if case is None:
-                if os.getenv("ORCH_DEBUG"):
-                    print("DEBUG confirmation: no OPEN case found")
                 await self._send_out_of_scope(conversation_id, employee_id)
                 return
 
-            if os.getenv("ORCH_DEBUG"):
-                print("DEBUG confirmation: case found", case.id)
 
             result = transition(State.OPEN, StateMachineEvent.CANDIDATES_COMPUTED)
             case.status = result.new_state.value
@@ -461,8 +457,6 @@ class RescueOrchestrator:
                 location_tz=location_tz,
                 now=now,
             )
-            if os.getenv("ORCH_DEBUG"):
-                print("DEBUG confirmation: wave sent count", offered_count)
 
             if offered_count == 0:
                 # No eligible candidates at all: escalate — unless the wave was
@@ -611,7 +605,7 @@ class RescueOrchestrator:
             employee = await self._employee(candidate.employee_id)
             if employee is None:
                 continue
-            offer_id = f"offer_{case.id}_w{wave_number}_{candidate.employee_id}"
+            offer_id = f"offer_{uuid4().hex}"
             session.add(
                 Offer(
                     id=offer_id,
@@ -640,22 +634,40 @@ class RescueOrchestrator:
                     actor="system",
                 )
             )
-            provider_id = await self._channel.send(
-                recipient_phone_e164=self._phone_of(employee),
-                body=render(
-                    "offer",
-                    employee_name=employee["full_name"],
-                    location_name=location_name,
-                    role=self._role_label(shift.role),
-                    start=self._fmt(shift.starts_at, location_tz),
-                    end=self._fmt(shift.ends_at, location_tz),
-                ),
-                template_key="offer",
-                rescue_id=case.id,
-            )
+            try:
+                provider_id = await self._channel.send(
+                    recipient_phone_e164=self._phone_of(employee),
+                    body=render(
+                        "offer",
+                        employee_name=employee["full_name"],
+                        location_name=location_name,
+                        role=self._role_label(shift.role),
+                        start=self._fmt(shift.starts_at, location_tz),
+                        end=self._fmt(shift.ends_at, location_tz),
+                    ),
+                    template_key="offer",
+                    rescue_id=case.id,
+                )
+            except Exception as error:
+                # Provider rejected the recipient (unjoined number, delivery
+                # failure…): drop that candidate, keep the wave alive (§5.5).
+                offer_row = await self._offer(session, offer_id)
+                if offer_row is not None:
+                    offer_row.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{offer_id}_delivery_failed",
+                        rescue_id=case.id,
+                        type="DELIVERY_FAILED",
+                        payload={"employee_id": candidate.employee_id, "error": str(error)[:200]},
+                        actor="system",
+                    )
+                )
+                continue
+
             session.add(
                 Message(
-                    id=f"msg_out_{offer_id}",
+                    id=f"msg_{uuid4().hex}",
                     conversation_id=f"conv_{candidate.employee_id}",
                     direction="outbound",
                     provider_message_id=provider_id,
@@ -726,7 +738,7 @@ class RescueOrchestrator:
                 case.status = result.new_state.value
                 session.add(
                     ApprovalRequest(
-                        id=f"appr_late_{offer.id}",
+                        id=f"appr_{uuid4().hex}",
                         rescue_id=case.id,
                         offer_id=offer.id,
                         kind="overtime" if offer.requires_approval else "schedule_change",
@@ -816,7 +828,7 @@ class RescueOrchestrator:
                 case.status = result.new_state.value
                 session.add(
                     ApprovalRequest(
-                        id=f"appr_{offer.id}",
+                        id=f"appr_{uuid4().hex}",
                         rescue_id=case.id,
                         offer_id=offer.id,
                         kind="overtime",
@@ -1494,11 +1506,13 @@ class RescueOrchestrator:
         return by_opened
 
     async def _upcoming_shifts_of(self, employee_id: str, now: datetime) -> list:
+        """Shifts that have not ended yet — including one already in progress,
+        which can be covered for the remaining time (spec §5.3)."""
         location_id = await self._location_of(employee_id)
         if location_id is None:
             return []
         schedule = await self._workforce.get_schedule(
-            location_id, now - timedelta(hours=4), now + timedelta(hours=48)
+            location_id, now - timedelta(hours=24), now + timedelta(days=2)
         )
         return [s for s in schedule if s.employee_id == employee_id and s.ends_at > now]
 
@@ -1558,18 +1572,30 @@ class RescueOrchestrator:
         **params: Any,
     ) -> None:
         body = render(template_key, **params)
-        provider_id = await self._channel.send(
-            recipient_phone_e164=to,
-            body=body,
-            template_key=template_key,
-            rescue_id=rescue_id,
-        )
+        try:
+            provider_id = await self._channel.send(
+                recipient_phone_e164=to,
+                body=body,
+                template_key=template_key,
+                rescue_id=rescue_id,
+            )
+        except Exception as error:
+            # Delivery failures are surfaced (Ops screen / alerting) but must
+            # never crash the inbound path (§9.2, §9.3).
+            structlog.get_logger(__name__).warning(
+                "outbound_delivery_failed",
+                template_key=template_key,
+                recipient=mask_phone(to),
+                rescue_id=rescue_id,
+                error=str(error)[:200],
+            )
+            return
         if conversation_id is None:
             return
         async with self._sessions() as session:
             session.add(
                 Message(
-                    id=f"msg_out_{template_key}_{provider_id}",
+                    id=f"msg_{uuid4().hex}",
                     conversation_id=conversation_id,
                     direction="outbound",
                     provider_message_id=provider_id,
