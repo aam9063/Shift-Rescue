@@ -208,3 +208,18 @@ export const DEFAULT_SETTINGS: LocationSettings = {
   quietStart: "23:00",
   quietEnd: "07:00",
 };
+
+export interface SystemStatus {
+  degraded: boolean;
+  reasons: string[];
+  details: string[];
+}
+
+export const SYSTEM_STATUS: SystemStatus = { degraded: false, reasons: [], details: [] };
+
+/** Swappable source so screens can be tested without the real API. */
+export const systemStatusSource = {
+  async get(): Promise<SystemStatus> {
+    return SYSTEM_STATUS;
+  },
+};

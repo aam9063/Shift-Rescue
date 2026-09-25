@@ -11,6 +11,8 @@ import {
   type EvalRunSummary,
   type LocationSettings,
   type OpsMetrics,
+  type SystemStatus,
+  systemStatusSource,
 } from './dashboardMock'
 
 /**
@@ -76,4 +78,13 @@ export function useSettings(): {
     save: (next) => mutation.mutate(next),
     saved: mutation.isSuccess,
   }
+}
+
+export function useSystemStatus(): { status: SystemStatus | undefined } {
+  const query = useQuery({
+    queryKey: ['system-status'],
+    queryFn: () => systemStatusSource.get(),
+    staleTime: 0,
+  })
+  return { status: query.data }
 }

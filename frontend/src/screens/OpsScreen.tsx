@@ -1,5 +1,5 @@
 import { LineChart } from '../components/LineChart'
-import { useOpsMetrics } from '../services/dashboard'
+import { useOpsMetrics, useSystemStatus } from '../services/dashboard'
 
 function KpiCard({
   label,
@@ -34,6 +34,7 @@ function KpiCard({
  */
 export function OpsScreen() {
   const { metrics } = useOpsMetrics()
+  const { status } = useSystemStatus()
   if (!metrics) {
     return <p className="text-base text-text-secondary">Loading…</p>
   }
@@ -43,6 +44,22 @@ export function OpsScreen() {
       <h1 className="font-serif text-4xl font-semibold tracking-tight text-green-starbucks">
         Operations
       </h1>
+
+      {status?.degraded && (
+        <div
+          role="alert"
+          className="rounded-card border border-warning bg-warning/10 px-4 py-3 shadow-card"
+        >
+          <p className="text-base font-semibold tracking-tight text-text-primary">
+            Degraded mode
+          </p>
+          <ul className="mt-1 list-inside list-disc text-sm tracking-tight text-text-secondary">
+            {(status.details.length > 0 ? status.details : status.reasons).map((detail) => (
+              <li key={detail}>{detail}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
