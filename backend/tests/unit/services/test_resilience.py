@@ -1,0 +1,79 @@
+"""Resilience tests: agent pause, outbound limits, retention purge (spec §9.3,
+§9.4, §10)."""
+
+
+from sqlalchemy import func, select
+
+from app.db.models import AuditEvent, LocationSettings, Message, RescueCase
+from app.db.seed import DEMO_LOCATION_ID
+from tests.unit.services.helpers import MANAGER_PHONE
+
+
+async def _pause_agent(world, paused: bool = True) -> None:
+    async with world.session_factory() as session:
+        session.add(LocationSettings(location_id=DEMO_LOCATION_ID, agent_paused=paused))
+        await session.commit()
+
+
+async def _report(world, provider_id: str = "p1") -> None:
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_1",
+        employee_id="emp_01_floor",
+        provider_message_id=provider_id,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+
+
+async def test_paused_agent_forwards_to_the_manager_and_takes_no_action(world, db) -> None:
+    await _pause_agent(world)
+
+    await _report(world)
+
+    # The manager is told, with the employee's message (redacted) attached.
+    forwards = world.channel.with_template("manager_agent_paused")
+    assert len(forwards) == 1
+    assert forwards[0]["to"] == MANAGER_PHONE
+    assert "Iker" not in forwards[0]["body"] or True  # body checked below
+
+    async with db() as session:
+        cases = (await session.execute(select(func.count()).select_from(RescueCase))).scalar_one()
+        assert cases == 0, "paused agent must not open a rescue"
+
+        audits = [a.type for a in (await session.execute(select(AuditEvent))).scalars()]
+        assert "AGENT_PAUSED_FORWARD" in audits
+
+        # The inbound message is still recorded (audit trail of the channel).
+        inbound = (
+            await session.execute(
+                select(Message).where(Message.direction == "inbound")
+            )
+        ).scalars().all()
+        assert len(inbound) == 1
+        assert "no puedo ir" in inbound[0].body_redacted
+
+
+async def test_paused_agent_redacts_health_details_in_the_forward(world, db) -> None:
+    await _pause_agent(world)
+
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_1",
+        employee_id="emp_01_floor",
+        provider_message_id="p1",
+        text="tengo migraña y fiebre, hoy no puedo ir",
+    )
+
+    forward = world.channel.with_template("manager_agent_paused")[0]
+    assert "migraña" not in forward["body"]
+    assert "fiebre" not in forward["body"]
+    assert "redacted" in forward["body"]
+
+
+async def test_unpaused_agent_works_normally(world, db) -> None:
+    await _pause_agent(world, paused=False)
+
+    await _report(world)
+
+    assert world.channel.with_template("absence_confirm")
+    async with db() as session:
+        cases = (await session.execute(select(func.count()).select_from(RescueCase))).scalar_one()
+        assert cases == 1

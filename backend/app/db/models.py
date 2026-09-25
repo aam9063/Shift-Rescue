@@ -198,7 +198,8 @@ class AuditEvent(Base):
     __tablename__ = "audit_event"
 
     id: Mapped[str] = _pk()
-    rescue_id: Mapped[str] = mapped_column(String(64), index=True)
+    # Nullable: system-level events (e.g. paused-agent forwards) belong to no case.
+    rescue_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     type: Mapped[str] = mapped_column(String(40))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     # system | llm | employee:<id> | manager:<id>

@@ -93,6 +93,11 @@ class RescueOrchestrator:
         if not persisted:
             return  # duplicate provider message: processed once (spec §7.4)
 
+        # Spec §9.3: a paused agent does nothing — the manager takes over.
+        if await self._agent_is_paused(employee_id):
+            await self._forward_to_manager_when_paused(employee_id, text)
+            return
+
         if self.interpreter is not None:
             try:
                 llm_context = {
@@ -296,6 +301,50 @@ class RescueOrchestrator:
                 )
             ).scalars()
             return [o.id for o in offers]
+
+    async def _agent_is_paused(self, employee_id: str) -> bool:
+        location_id = await self._location_of(employee_id)
+        if location_id is None:
+            return False
+        async with self._sessions() as session:
+            settings = (
+                await session.execute(
+                    select(LocationSettings).where(
+                        LocationSettings.location_id == location_id
+                    )
+                )
+            ).scalar_one_or_none()
+        return bool(settings and settings.agent_paused)
+
+    async def _forward_to_manager_when_paused(self, employee_id: str, text: str) -> None:
+        """Paused agent: hand the message to the manager, never act on it."""
+        location_id = await self._location_of(employee_id)
+        location_name, _ = await self._location_info(location_id or "")
+        employee = await self._employee(employee_id)
+        manager = await self._manager_for(location_id or "")
+
+        async with self._sessions() as session:
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=None,
+                    type="AGENT_PAUSED_FORWARD",
+                    payload={"employee_id": employee_id},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+
+        if employee is None or manager is None or not manager.get("phone_e164"):
+            return
+        await self._send_template(
+            to=manager["phone_e164"],
+            template_key="manager_agent_paused",
+            employee_name=employee["full_name"],
+            # Health details never leave the conversation (spec §10).
+            message=redact_if_health(text),
+            location_name=location_name,
+        )
 
     async def _persist_inbound(
         self,
