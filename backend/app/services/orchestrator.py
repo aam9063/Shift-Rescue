@@ -239,7 +239,7 @@ class RescueOrchestrator:
             offer.requires_approval = True
             session.add(
                 ApprovalRequest(
-                    id=f"appr_cond_{offer.id}",
+                    id=f"appr_{uuid4().hex}",
                     rescue_id=case.id,
                     offer_id=offer.id,
                     kind="partial_coverage",
@@ -316,7 +316,7 @@ class RescueOrchestrator:
             await self._get_or_create_conversation(session, conversation_id, employee_id)
             session.add(
                 Message(
-                    id=f"msg_in_{provider_message_id}",
+                    id=f"msg_{uuid4().hex}",
                     conversation_id=conversation_id,
                     direction="inbound",
                     provider_message_id=provider_message_id,
@@ -373,10 +373,11 @@ class RescueOrchestrator:
         target = shifts[0]
         deadline = self._deadline_for(now, target)
 
+        case_id = f"case_{uuid4().hex}"
         async with self._sessions() as session:
             session.add(
                 RescueCase(
-                    id=f"case_{target.id}_{int(now.timestamp())}",
+                    id=case_id,
                     location_id=target.location_id,
                     shift_id=target.id,
                     absent_employee_id=employee_id,
@@ -603,7 +604,7 @@ class RescueOrchestrator:
             employee = await self._employee(candidate.employee_id)
             if employee is None:
                 continue
-            offer_id = f"offer_{case.id}_w{wave_number}_{candidate.employee_id}"
+            offer_id = f"offer_{uuid4().hex}"
             session.add(
                 Offer(
                     id=offer_id,
@@ -665,7 +666,7 @@ class RescueOrchestrator:
 
             session.add(
                 Message(
-                    id=f"msg_out_{offer_id}",
+                    id=f"msg_{uuid4().hex}",
                     conversation_id=f"conv_{candidate.employee_id}",
                     direction="outbound",
                     provider_message_id=provider_id,
@@ -736,7 +737,7 @@ class RescueOrchestrator:
                 case.status = result.new_state.value
                 session.add(
                     ApprovalRequest(
-                        id=f"appr_late_{offer.id}",
+                        id=f"appr_{uuid4().hex}",
                         rescue_id=case.id,
                         offer_id=offer.id,
                         kind="overtime" if offer.requires_approval else "schedule_change",
@@ -826,7 +827,7 @@ class RescueOrchestrator:
                 case.status = result.new_state.value
                 session.add(
                     ApprovalRequest(
-                        id=f"appr_{offer.id}",
+                        id=f"appr_{uuid4().hex}",
                         rescue_id=case.id,
                         offer_id=offer.id,
                         kind="overtime",
@@ -1593,7 +1594,7 @@ class RescueOrchestrator:
         async with self._sessions() as session:
             session.add(
                 Message(
-                    id=f"msg_out_{template_key}_{provider_id}",
+                    id=f"msg_{uuid4().hex}",
                     conversation_id=conversation_id,
                     direction="outbound",
                     provider_message_id=provider_id,

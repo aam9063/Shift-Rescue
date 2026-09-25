@@ -187,3 +187,35 @@ async def test_in_progress_shift_is_found_even_if_it_started_hours_ago(world, db
 
     assert world.channel.with_template("absence_confirm"), "in-progress shift not found"
     assert not world.channel.with_template("out_of_scope")
+
+
+async def test_every_persisted_id_fits_the_database_column_width(world, db) -> None:
+    """Postgres columns are VARCHAR(64): composed ids must never exceed it
+    (a longer id rolled back the whole confirmation transaction once)."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="sí",
+    )
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditEvent, Message, Offer, RescueCase
+
+    async with db() as session:
+        ids: list[str] = []
+        ids += [row.id for row in (await session.execute(select(RescueCase))).scalars()]
+        ids += [row.id for row in (await session.execute(select(Offer))).scalars()]
+        ids += [row.id for row in (await session.execute(select(Message))).scalars()]
+        ids += [row.id for row in (await session.execute(select(AuditEvent))).scalars()]
+
+    assert ids, "expected persisted rows"
+    too_long = [i for i in ids if len(i) > 64]
+    assert too_long == [], f"ids exceeding VARCHAR(64): {too_long}"
