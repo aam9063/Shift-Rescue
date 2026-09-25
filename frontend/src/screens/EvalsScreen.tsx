@@ -39,7 +39,7 @@ export function EvalsScreen() {
           <LineChart
             values={evalRun.accuracyHistory}
             reference={evalRun.threshold}
-            ariaLabel="Evolucion de intent accuracy"
+            ariaLabel="Intent accuracy evolution"
             leftCaption={`umbral ${evalRun.threshold}`}
             rightCaption={`actual ${evalRun.latestAccuracy}`}
           />

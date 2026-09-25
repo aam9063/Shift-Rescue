@@ -77,7 +77,7 @@ export function OpsScreen() {
             values={metrics.costHistory}
             ariaLabel="Daily LLM cost"
             leftCaption="14 days ago"
-            rightCaption="hoy"
+            rightCaption="today"
           />
         </div>
         <div className="rounded-card bg-surface p-6 shadow-card">
