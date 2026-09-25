@@ -6,7 +6,7 @@ function ApprovalItem({ approval }: { approval: ApprovalRequest }) {
   const { decide, isPending } = useDecideApproval()
   const description = approval.context.detail
     ? `${approval.context.employeeName} — ${approval.context.detail}`
-    : `${approval.context.employeeName}, turno ${approval.context.shiftTime}`
+    : `${approval.context.employeeName}, shift ${approval.context.shiftTime}`
   return (
     <li className="flex flex-wrap items-center justify-between gap-4 rounded-card bg-surface px-4 py-4 shadow-card md:px-6">
       <div className="flex items-start gap-3">

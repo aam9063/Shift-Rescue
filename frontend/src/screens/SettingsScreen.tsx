@@ -63,7 +63,7 @@ export function SettingsScreen() {
               </div>
               <button
                 type="button"
-                aria-label={`Peso: ${weight.label}`}
+                aria-label={`Weight: ${weight.label}`}
                 onClick={() => {
                   const next = [...draft.rankingWeights]
                   next[index] = {
