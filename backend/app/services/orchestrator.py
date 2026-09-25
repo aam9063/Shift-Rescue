@@ -56,6 +56,8 @@ class OrchestratorConfig:
     wave_interval_minutes: int = WAVE_INTERVAL_MINUTES
     deadline_minutes_before_start: int = DEADLINE_MINUTES_BEFORE_START
     min_deadline_minutes: int = MIN_DEADLINE_MINUTES
+    # Spec §9.4: cap outbound messages per employee per hour (0 disables it).
+    max_outbound_per_hour: int = 3
 
 
 class RescueOrchestrator:
@@ -92,6 +94,11 @@ class RescueOrchestrator:
         )
         if not persisted:
             return  # duplicate provider message: processed once (spec §7.4)
+
+        # Spec §9.3: a paused agent does nothing — the manager takes over.
+        if await self._agent_is_paused(employee_id):
+            await self._forward_to_manager_when_paused(employee_id, text)
+            return
 
         if self.interpreter is not None:
             try:
@@ -297,6 +304,50 @@ class RescueOrchestrator:
             ).scalars()
             return [o.id for o in offers]
 
+    async def _agent_is_paused(self, employee_id: str) -> bool:
+        location_id = await self._location_of(employee_id)
+        if location_id is None:
+            return False
+        async with self._sessions() as session:
+            settings = (
+                await session.execute(
+                    select(LocationSettings).where(
+                        LocationSettings.location_id == location_id
+                    )
+                )
+            ).scalar_one_or_none()
+        return bool(settings and settings.agent_paused)
+
+    async def _forward_to_manager_when_paused(self, employee_id: str, text: str) -> None:
+        """Paused agent: hand the message to the manager, never act on it."""
+        location_id = await self._location_of(employee_id)
+        location_name, _ = await self._location_info(location_id or "")
+        employee = await self._employee(employee_id)
+        manager = await self._manager_for(location_id or "")
+
+        async with self._sessions() as session:
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=None,
+                    type="AGENT_PAUSED_FORWARD",
+                    payload={"employee_id": employee_id},
+                    actor=f"employee:{employee_id}",
+                )
+            )
+            await session.commit()
+
+        if employee is None or manager is None or not manager.get("phone_e164"):
+            return
+        await self._send_template(
+            to=manager["phone_e164"],
+            template_key="manager_agent_paused",
+            employee_name=employee["full_name"],
+            # Health details never leave the conversation (spec §10).
+            message=redact_if_health(text),
+            location_name=location_name,
+        )
+
     async def _persist_inbound(
         self,
         conversation_id: str,
@@ -402,6 +453,7 @@ class RescueOrchestrator:
             to=self._phone_of(employee),
             template_key="absence_confirm",
             conversation_id=conversation_id,
+            employee_id=employee["id"],
             employee_name=employee["full_name"],
             role=self._role_label(target.role),
             start=self._fmt(target.starts_at),
@@ -665,6 +717,9 @@ class RescueOrchestrator:
                 )
                 continue
 
+            await self._get_or_create_conversation(
+                session, f"conv_{candidate.employee_id}", candidate.employee_id
+            )
             session.add(
                 Message(
                     id=f"msg_{uuid4().hex}",
@@ -675,6 +730,7 @@ class RescueOrchestrator:
                     template_key="offer",
                     delivery_status="sent",
                     rescue_id=case.id,
+                    created_at=now,
                 )
             )
             sent += 1
@@ -1562,6 +1618,53 @@ class RescueOrchestrator:
                     }
             return None
 
+    async def _outbound_limit_reached(self, employee_id: str) -> bool:
+        """Spec §9.4: at most `max_outbound_per_hour` messages per employee."""
+        limit = self._config.max_outbound_per_hour
+        if limit <= 0:
+            return False
+        since = _utc(self._clock.now()) - timedelta(hours=1)
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    select(Message.created_at)
+                    .join(Conversation, Conversation.id == Message.conversation_id)
+                    .where(
+                        Conversation.employee_id == employee_id,
+                        Message.direction == "outbound",
+                    )
+                )
+            ).scalars().all()
+        recent = [m for m in rows if m is not None and _aware(m) >= since]
+        return len(recent) >= limit
+
+    async def _register_outbound_limit(
+        self, employee_id: str, template_key: str, rescue_id: str | None
+    ) -> None:
+        async with self._sessions() as session:
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=rescue_id,
+                    type="OUTBOUND_LIMIT_EXCEEDED",
+                    payload={"employee_id": employee_id, "template_key": template_key},
+                    actor="system",
+                )
+            )
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=rescue_id,
+                    type="OUTBOUND_LIMIT_ALERT",
+                    payload={"employee_id": employee_id},
+                    actor="system",
+                )
+            )
+            await session.commit()
+        structlog.get_logger(__name__).warning(
+            "outbound_limit_exceeded", employee_id=employee_id, template_key=template_key
+        )
+
     async def _send_template(
         self,
         to: str,
@@ -1569,8 +1672,12 @@ class RescueOrchestrator:
         *,
         conversation_id: str | None = None,
         rescue_id: str | None = None,
+        employee_id: str | None = None,
         **params: Any,
     ) -> None:
+        if employee_id is not None and await self._outbound_limit_reached(employee_id):
+            await self._register_outbound_limit(employee_id, template_key, rescue_id)
+            return
         body = render(template_key, **params)
         try:
             provider_id = await self._channel.send(
@@ -1603,6 +1710,7 @@ class RescueOrchestrator:
                     template_key=template_key,
                     delivery_status="sent",
                     rescue_id=rescue_id,
+                    created_at=self._clock.now(),
                 )
             )
             await session.commit()

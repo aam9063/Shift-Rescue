@@ -43,6 +43,10 @@ _TEMPLATES: dict[str, str] = {
         "avisos de ausencia y coberturas. Para cualquier otra cosa, contacta "
         "con tu encargado."
     ),
+    "manager_agent_paused": (
+        "{employee_name} ha escrito: \"{message}\". El agente está en pausa en "
+        "{location_name}, así que lo dejo en tus manos."
+    ),
     "manager_escalated": (
         "No se ha podido cubrir el turno de {role} de {start} a {end}. "
         "Te dejo el resumen en el panel: revisa a quién contacté y qué opciones "
