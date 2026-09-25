@@ -1,6 +1,7 @@
 # Feature: llm-runtime-wiring
 
-**Status**: in progress
+**Status**: T1–T6 complete and committed; T7 (live verification with real
+credentials) partially verified — Langfuse confirmed, OpenAI pending the API key
 **Branch**: `feature/llm-runtime-wiring` (from `main` @ `38d26fc`)
 **Spec references**: §6 (LLM usage points), §7.3 (Strands), §9.3 (degradation), §9.4 (observability), §12 (config)
 **ADRs**: ADR-002 (Strands without autonomous loop), ADR-004 (provider selection, new)
@@ -126,4 +127,68 @@ removing the never-read `LLM_PROVIDER_INTERPRETER` / `NAN_*` block).
 
 ## Verification evidence
 
-_Pending — recorded as each task closes._
+### Automated checks (branch `feature/llm-runtime-wiring`)
+
+| Check | Result |
+| --- | --- |
+| `cd backend && uv run pytest -q` | `258 passed, 2 skipped` (was 225 passed: +33 new tests; the 2 skips are the pre-existing PostgreSQL integration markers) |
+| `cd backend && uv run ruff check .` | `All checks passed!` |
+| `cd backend && uv run mypy app` | `Success: no issues found in 51 source files` |
+| `Settings(_env_file=None)` smoke | `openai True False None` |
+
+### Fail-closed behaviour (real objects, fake key)
+
+```
+OpenAI model built: OpenAIModel | config: gpt-4o-mini {'max_tokens': 500, 'temperature': 0.0}
+no key -> None                    # llm_disabled reason='OPENAI_API_KEY is not set'
+none   -> None                    # llm_disabled reason='provider is disabled'
+interpreter: MessageInterpreter | llm: StrandsLLMClient | threshold: 0.75
+Bedrock model built: BedrockModel  # signature verified, never exercised
+```
+
+### Live runtime (rebuilt `api` container, real `backend/.env`)
+
+```
+tracing_enabled endpoint_host=cloud.langfuse.com
+llm_disabled    reason='OPENAI_API_KEY is not set — add it to backend/.env'
+llm_path        active=false detail='provider=openai model=gpt-4o-mini'
+```
+
+This is acceptance criterion 1 verified in the deployed shape: the API boots
+with no provider credential, reports it once, and keeps serving through the
+deterministic parser.
+
+### Langfuse Cloud — end to end with the real keys
+
+`scripts/verify_langfuse.py` (new, reusable) exports one span through the
+configured OTLP/HTTP exporter and reads it back from Langfuse:
+
+```
+endpoint: https://cloud.langfuse.com/api/public/otel/v1/traces
+auth header present: True
+span emitted
+observations in the last 15 min: 1
+  - rescue.lifecycle | GENERATION | 2026-09-25T10:24:09.432Z | id=047fcd20cb2e8b4c
+OK: Langfuse Cloud receives traces from this configuration
+```
+
+Acceptance criterion 3 verified. Note for maintainers: Langfuse retired
+`GET /api/public/traces` (`410 LEGACY_API_UNAVAILABLE_FOR_NEW_ORGANIZATION` for
+organizations created on or after 2026-09-16); reads now use
+`GET /api/public/v2/observations?fromStartTime=&toStartTime=`. The exporter
+endpoint is unchanged.
+
+### Environment correction
+
+The user's `backend/.env` had a broken comment (a line that lost its leading
+`#`), which made `python-dotenv` abort parsing from line 18 onward, plus three
+variables no code ever read (`LLM_PROVIDER_INTERPRETER`, `NAN_API_KEY`,
+`NAN_BASE_URL`, `LLM_MODEL_INTERPRETER_NAN`). The LLM block was rewritten with
+the ADR-004 names (backup at `backend/.env.bak`); the gateway credentials are
+preserved as commented lines, reachable as `OPENAI_BASE_URL`.
+
+### Pending
+
+Real OpenAI interpretation (acceptance criterion 2) needs `OPENAI_API_KEY` in
+`backend/.env`; the eval suite is then re-run with `--provider interpreter` to
+close the accuracy thresholds in `docs/eval-report.md`.
