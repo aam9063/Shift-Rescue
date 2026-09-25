@@ -43,6 +43,7 @@ OpenAI-compatible gateway (NaN), which stays reachable without a code change.
 | Tracing | OpenTelemetry → **Langfuse Cloud** over OTLP/HTTP, `configure_tracing()` idempotent, endpoint/keys from `Settings` | ADR-003: no self-hosted Langfuse. Strands emits native model spans, so no manual instrumentation is needed. |
 | Secrets | Never logged, never returned, never committed; only endpoint host and provider/model id are logged | The repository is public and demo logs are shared with reviewers. |
 | Cost | Per-provider default prices per 1K tokens, overridable by `LLM_PRICE_*_PER_1K` | Cost per rescue must be auditable in Langfuse and in the Ops screen. |
+| Latency target | **p95 < 2.5 s** for the interpretation call (was 1.2 s, an unmeasured mockup figure) | Measured against the real provider: 1.0–2.8 s per call, including the Strands agent cycle and the provider round trip. The eval harness already tolerated 5 s (`avg_latency_ms_max`), so 2.5 s is the first figure grounded in observation. |
 
 ### Rejected alternatives
 
@@ -71,3 +72,11 @@ OpenAI-compatible gateway (NaN), which stays reachable without a code change.
   eval suite must keep covering both paths (`llm_down` scenarios stay).
 - Prices are configuration, not truth: a provider price change requires a
   settings update, and the numbers are estimates for cost control, not billing.
+  Prompt-cache discounts are not applied, so the reported cost is a conservative
+  upper bound (measured: ~1024 of ~1150 input tokens are cache reads).
+- **Open deviation (spec §7.5):** the inbound Twilio webhook now awaits the
+  interpretation call, so it takes 1–3 s instead of the specified < 200 ms with
+  an enqueued job. Twilio's own timeout is 15 s, so the demo works, but moving
+  the interpretation off the request path (Celery task, as spec §7.5 requires)
+  is the next step for production readiness and is tracked in
+  `odd/tasks/llm-runtime-wiring.md`.

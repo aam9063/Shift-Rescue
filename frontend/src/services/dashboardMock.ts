@@ -182,8 +182,8 @@ export const EVAL_RUN: EvalRunSummary = {
 export const OPS_METRICS: OpsMetrics = {
   costToday: 4.12,
   rescuesCount: 38,
-  p95LatencyMs: 820,
-  latencyTargetMs: 1200,
+  p95LatencyMs: 1980,
+  latencyTargetMs: 2500,
   lowConfidencePct: 6,
   lowConfidenceTotal: 340,
   stuckCount: 1,

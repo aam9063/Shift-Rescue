@@ -217,16 +217,38 @@ After the fixes:
 
 Acceptance criterion 2 verified. Two observations to act on:
 
-- **Latency**: interpret calls land at 1.0–2.8 s, above the “p95 < 1.2 s”
-  target advertised in the Ops mockup. The measured time includes the Strands
-  agent cycle, so either the target moves to ~2.5 s or the system prompt (≈1.1 k
-  input tokens per call) is trimmed. Cost is unaffected either way.
-- **Prompt size**: ~1150 input tokens per short message, of which ~1024 are
-  served from the provider's prompt cache (`cacheReadInputTokens`), so the
-  uncached cost is lower than the conservative estimate above.
+- **Latency — decided (option a):** the dashboard target moves from 1.2 s to
+  **2.5 s** (`frontend/src/services/dashboardMock.ts`), because the 1.2 s figure
+  was a mockup number never measured while the real calls land at 1.0–2.8 s
+  including the Strands agent cycle. `evals/thresholds.yaml` already allowed
+  5 s. The system prompt stays as it is: ~1150 input tokens per call, of which
+  ~1024 are prompt-cache reads, so trimming it buys latency only at the cost of
+  interpretation quality.
+- **Prompt size:** ~1024 of ~1150 input tokens are served from the provider's
+  prompt cache (`cacheReadInputTokens`), so the real cost is below the
+  conservative estimate reported per call.
+
+### Open deviation found while verifying
+
+Spec §7.5 requires the inbound Twilio webhook to answer in **under 200 ms** and
+never call the LLM inside it (validate, persist, enqueue). The current wiring
+awaits `orchestrator.handle_inbound()` — and therefore the interpretation call —
+so the webhook now takes 1–3 s. Twilio's webhook timeout is 15 s, so the demo is
+unaffected, but moving interpretation to a Celery task is the next production
+step and is not done here. Verified evidence: the latency numbers above are
+the webhook's own critical path.
 
 ### Pending
 
-Real OpenAI interpretation (acceptance criterion 2) needs `OPENAI_API_KEY` in
-`backend/.env`; the eval suite is then re-run with `--provider interpreter` to
-close the accuracy thresholds in `docs/eval-report.md`.
+- Full eval run against the real model (`uv run python evals/runner.py
+  --provider interpreter`), which closes the accuracy thresholds in
+  `docs/eval-report.md`.
+- Move the interpretation call off the webhook request path (Celery task per
+  spec §7.5) — see the open deviation above.
+- Rotate the OpenAI key that was exposed in the session transcript: done by the
+  user, re-verified against the live API after rotation.
+
+## Next step
+
+Push `feature/llm-runtime-wiring` and open the PR for review; the eval run and
+the webhook offloading are separate work units.
