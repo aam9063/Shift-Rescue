@@ -87,7 +87,7 @@ export const CONVERSATIONS: Conversation[] = [
     initials: "ML",
     lastMessage: "puedo pero llego a las 15:15",
     intent: "OFFER_CONDITIONAL",
-    rescueLabel: "Sala 15:00",
+    rescueLabel: "Floor 15:00",
     messages: [
       { from: "assistant", text: "Hola Marta, ha quedado libre un turno de Sala hoy de 15:00 a 23:00. Puedes cubrirlo?" },
       { from: "employee", text: "puedo pero llego a las 15:15" },
@@ -100,7 +100,7 @@ export const CONVERSATIONS: Conversation[] = [
     initials: "IR",
     lastMessage: "no puedo, lo siento",
     intent: "OFFER_DECLINE",
-    rescueLabel: "Sala 15:00",
+    rescueLabel: "Floor 15:00",
     messages: [
       { from: "assistant", text: "Hola Ivan, ha quedado libre un turno de Sala hoy de 15:00 a 23:00. Puedes cubrirlo?" },
       { from: "employee", text: "no puedo, lo siento" },
@@ -112,7 +112,7 @@ export const CONVERSATIONS: Conversation[] = [
     initials: "IM",
     lastMessage: "buenas, me encuentro fatal, hoy no puedo ir",
     intent: "ABSENCE_REPORT",
-    rescueLabel: "Sala 15:00",
+    rescueLabel: "Floor 15:00",
     messages: [
       { from: "employee", text: "buenas, me encuentro fatal, hoy no puedo ir" },
       { from: "assistant", text: "Recibido, que te mejores. Ya me encargo de buscar a alguien." },
@@ -124,7 +124,7 @@ export const CONVERSATIONS: Conversation[] = [
     initials: "SP",
     lastMessage: "vale, cuento contigo entonces",
     intent: "SMALLTALK",
-    rescueLabel: "Sin rescate",
+    rescueLabel: "No rescue",
     messages: [{ from: "employee", text: "vale, cuento contigo entonces" }],
   },
   {
@@ -133,7 +133,7 @@ export const CONVERSATIONS: Conversation[] = [
     initials: "PS",
     lastMessage: "cuantos dias de vacaciones me quedan?",
     intent: "QUESTION",
-    rescueLabel: "Sin rescate",
+    rescueLabel: "No rescue",
     messages: [{ from: "employee", text: "cuantos dias de vacaciones me quedan?" }],
   },
   {
@@ -142,7 +142,7 @@ export const CONVERSATIONS: Conversation[] = [
     initials: "DF",
     lastMessage: "oferta recibida, dejame pensarlo",
     intent: "UNCLEAR",
-    rescueLabel: "Sala 15:00",
+    rescueLabel: "Floor 15:00",
     messages: [{ from: "employee", text: "oferta recibida, dejame pensarlo" }],
   },
 ];
@@ -189,19 +189,19 @@ export const OPS_METRICS: OpsMetrics = {
   stuckCount: 1,
   costHistory: [2.9, 3.1, 3.0, 3.3, 3.2, 3.6, 3.5, 3.9, 3.7, 4.1, 4.0, 4.05, 4.02, 4.04],
   alerts: [
-    { severity: "error", title: "Rescate atascado", detail: "Barra 19:00-23:00, sin eventos desde hace 18 min." },
-    { severity: "warning", title: "Tasa de baja confianza alta", detail: "22% en la ultima hora, por encima del umbral." },
-    { severity: "warning", title: "Fallo de entrega", detail: "Un mensaje a Pau S. no se pudo entregar." },
+    { severity: "error", title: "Stuck rescue", detail: "Bar 19:00-23:00, no events for 18 min." },
+    { severity: "warning", title: "High low-confidence rate", detail: "22% in the last hour, above the threshold." },
+    { severity: "warning", title: "Delivery failure", detail: "A message to Pau S. could not be delivered." },
   ],
 };
 
 export const DEFAULT_SETTINGS: LocationSettings = {
   agentPaused: false,
   rankingWeights: [
-    { label: "Equidad de coberturas", level: "high" },
-    { label: "Proximidad (misma zona)", level: "medium" },
-    { label: "Preferencia por horas extra", level: "medium" },
-    { label: "Sin horas extra primero", level: "high" },
+    { label: "Coverage equity", level: "high" },
+    { label: "Proximity (same zone)", level: "medium" },
+    { label: "Extra-shift preference", level: "medium" },
+    { label: "No overtime first", level: "high" },
   ],
   waveSize: 3,
   waveIntervalMinutes: 10,

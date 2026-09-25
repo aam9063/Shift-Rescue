@@ -73,12 +73,12 @@ export function AgentDecisionsScreen() {
           <thead>
             <tr className="border-b border-black/5 text-xs uppercase tracking-wider text-text-secondary">
               <th className="py-3 pr-4 font-medium">Time</th>
-              <th className="py-3 pr-4 font-medium">Empleado</th>
+              <th className="py-3 pr-4 font-medium">Employee</th>
               <th className="py-3 pr-4 font-medium">Intent</th>
-              <th className="py-3 pr-4 font-medium">Confianza</th>
-              <th className="py-3 pr-4 font-medium">Modelo</th>
-              <th className="py-3 pr-4 font-medium">Coste</th>
-              <th className="py-3 pr-4 font-medium">Latencia</th>
+              <th className="py-3 pr-4 font-medium">Confidence</th>
+              <th className="py-3 pr-4 font-medium">Model</th>
+              <th className="py-3 pr-4 font-medium">Cost</th>
+              <th className="py-3 pr-4 font-medium">Latency</th>
               <th className="py-3 font-medium">Validation</th>
             </tr>
           </thead>

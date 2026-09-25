@@ -115,7 +115,7 @@ export function SettingsScreen() {
         <h2 className="mb-4 text-lg font-semibold tracking-tight">Quiet hours</h2>
         <div className="grid grid-cols-2 gap-4">
           <label className="block text-sm tracking-tight text-text-secondary">
-            Desde
+            From
             <input
               type="time"
               value={draft.quietStart}
@@ -124,7 +124,7 @@ export function SettingsScreen() {
             />
           </label>
           <label className="block text-sm tracking-tight text-text-secondary">
-            Hasta
+            To
             <input
               type="time"
               value={draft.quietEnd}
