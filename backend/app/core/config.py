@@ -1,5 +1,11 @@
-"""Application settings loaded from environment variables (spec §12)."""
+"""Application settings loaded from environment variables (spec §12).
 
+`Settings` is the single reader of environment configuration: every variable
+the runtime consumes is declared here with a type and a default; stale or
+unknown variables are ignored (`extra="ignore"`).
+"""
+
+import base64
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +29,54 @@ class Settings(BaseSettings):
 
     # Privacy (spec §10): message bodies older than this are purged.
     message_retention_days: int = 30
+
+    # LLM provider (ADR-004): OpenAI by default, anthropic/bedrock behind the
+    # same factory, `none` disables the LLM path (deterministic parser only).
+    llm_provider: str = "openai"
+    llm_model_interpreter: str = ""  # empty -> provider default
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 500
+    llm_timeout_seconds: float = 10.0
+    llm_confidence_threshold: float = 0.75
+    llm_price_input_per_1k: float = 0.0  # 0.0 -> provider default
+    llm_price_output_per_1k: float = 0.0  # 0.0 -> provider default
+    openai_api_key: str = ""
+    openai_base_url: str | None = None  # OpenAI-compatible gateways (e.g. NaN)
+    anthropic_api_key: str = ""
+    aws_region: str = "eu-west-1"
+
+    # Observability: OTLP/HTTP traces to Langfuse Cloud (ADR-003).
+    otel_exporter_otlp_endpoint: str | None = None  # explicit override
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+    sentry_dsn: str = ""  # declared for .env parity; Sentry init not wired yet
+
+    @property
+    def llm_enabled(self) -> bool:
+        """True unless the provider is explicitly turned off."""
+        return self.llm_provider.strip().lower() not in {"", "none", "disabled"}
+
+    @property
+    def traces_endpoint(self) -> str | None:
+        """OTLP/HTTP endpoint: explicit override, else the Langfuse Cloud one."""
+        if self.otel_exporter_otlp_endpoint:
+            return self.otel_exporter_otlp_endpoint
+        if self.langfuse_public_key and self.langfuse_secret_key:
+            return f"{self.langfuse_host.rstrip('/')}/api/public/otel/v1/traces"
+        return None
+
+    @property
+    def tracing_enabled(self) -> bool:
+        return self.traces_endpoint is not None
+
+    @property
+    def traces_auth_header(self) -> str | None:
+        """Langfuse Basic auth header; None when either key is missing."""
+        if not (self.langfuse_public_key and self.langfuse_secret_key):
+            return None
+        raw = f"{self.langfuse_public_key}:{self.langfuse_secret_key}".encode()
+        return f"Basic {base64.b64encode(raw).decode()}"
 
 
 @lru_cache

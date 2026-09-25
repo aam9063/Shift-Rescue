@@ -2,7 +2,7 @@
 
 Usage:
   uv run python evals/runner.py --provider parser        # offline baseline
-  uv run python evals/runner.py --provider interpreter   # real model, needs ANTHROPIC_API_KEY
+  uv run python evals/runner.py --provider interpreter   # real model via app.agent.factory (OPENAI_API_KEY by default)
 
 The parser baseline is informational: it measures the degraded-mode floor.
 Threshold checks only block when a real model is evaluated.
@@ -22,6 +22,11 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.domain.parser import Intent, parse_message  # noqa: E402
+
+
+class LLMInterpreterUnavailable(Exception):
+    """The LLM path is not configured; the message names the missing variable."""
+
 
 GOLDEN = Path(__file__).parent / "golden" / "interpreter_golden.jsonl"
 REPORTS = Path(__file__).parent / "reports"
@@ -56,44 +61,30 @@ class ParserProvider:
 
 
 class InterpreterProvider:
-    """Real-model provider via MessageInterpreter + StrandsLLMClient."""
+    """Real-model provider built by the shared factory (app.agent.factory), so
+    evals and production resolve the provider identically (ADR-004)."""
 
-    name = "interpreter (anthropic)"
+    name = "interpreter"
 
     def __init__(self) -> None:
-        import os
+        from app.agent.factory import build_interpreter, resolve_model_id
+        from app.core.config import get_settings
 
-        import anthropic  # provided by strands-agents[anthropic]
-
-        from app.agent.interpreter import MessageInterpreter
-        from app.agent.llm import StrandsLLMClient
-        from app.agent.schemas import Interpretation
-        from strands import Agent
-        from strands.models.anthropic import AnthropicModel
-
-        model_id = os.getenv("LLM_MODEL_INTERPRETER", "claude-haiku-4-5-20251001")
-        model = AnthropicModel(
-            model_id=model_id,
-            params={"max_tokens": 500, "temperature": 0.0},
-            client=anthropic.AsyncAnthropic(),  # reads ANTHROPIC_API_KEY
-        )
-        system_prompt = (Path(__file__).parent.parent / "backend/app/agent/prompts/interpreter_v1.md").read_text(
-            encoding="utf8"
-        )
-        self._client = StrandsLLMClient(
-            agent_factory=lambda: Agent(
-                model=model,
-                system_prompt=system_prompt,
-                structured_output_model=Interpretation,
-                callback_handler=None,
+        settings = get_settings()
+        self.name = f"interpreter ({resolve_model_id(settings)})"
+        self._interpreter = build_interpreter(settings)
+        if self._interpreter is None:
+            raise LLMInterpreterUnavailable(
+                "LLM interpreter is not configured: set OPENAI_API_KEY "
+                "(or ANTHROPIC_API_KEY with LLM_PROVIDER=anthropic) in backend/.env"
             )
-        )
-        self._interpreter = MessageInterpreter(llm=self._client)
-        self._model_id = model_id
+        # The factory wraps StrandsLLMClient inside MessageInterpreter; the
+        # usage record (tokens/cost) lives on the client.
+        self._client = getattr(self._interpreter, "_llm", None)
 
     async def interpret(self, message: str, context: dict) -> dict:
         result = await self._interpreter.interpret(message, context)
-        usage = self._client.last_usage or {}
+        usage = getattr(self._client, "last_usage", None) or {}
         return {
             "intent": result.intent,
             "confidence": result.confidence,
@@ -214,11 +205,14 @@ async def main() -> int:
     parser.add_argument("--provider", choices=["parser", "interpreter"], default="parser")
     args = parser.parse_args()
 
-    if args.provider == "interpreter" and not __import__("os").environ.get("ANTHROPIC_API_KEY"):
-        print("ANTHROPIC_API_KEY not set: cannot run the real-model eval.", file=sys.stderr)
-        return 2
-
-    provider = ParserProvider() if args.provider == "parser" else InterpreterProvider()
+    if args.provider == "interpreter":
+        try:
+            provider = InterpreterProvider()
+        except LLMInterpreterUnavailable as error:
+            print(error, file=sys.stderr)
+            return 2
+    else:
+        provider = ParserProvider()
     report = await run(provider)
     report.update(
         {

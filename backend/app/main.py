@@ -12,6 +12,7 @@ from app.api.status import router as status_router
 from app.api.webhooks_twilio import router as twilio_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.observability.tracing import configure_tracing, shutdown_tracing
 
 SCHEDULER_TICK_SECONDS = 5
 
@@ -42,6 +43,8 @@ async def _scheduler_ticker() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    configure_tracing(settings)
     ticker = asyncio.create_task(_scheduler_ticker())
     try:
         yield
@@ -49,6 +52,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ticker.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await ticker
+        shutdown_tracing()
 
 
 def create_app() -> FastAPI:

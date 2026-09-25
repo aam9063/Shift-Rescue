@@ -42,9 +42,10 @@ class MessageInterpreter:
                 attempt_context = {**attempt_context, "validation_error": last_error}
             try:
                 raw = await self._llm.interpret(message_body, attempt_context)
-                return Interpretation(
-                    **raw, prompt_version=self.prompt_version
-                ).model_copy()
+                # A real LLMClient returns the whole structured payload, which
+                # already carries prompt_version; the interpreter owns it, so it
+                # must overwrite rather than duplicate the keyword argument.
+                return Interpretation(**{**raw, "prompt_version": self.prompt_version})
             except ValidationError as error:
                 last_error = str(error)
             except Exception as error:

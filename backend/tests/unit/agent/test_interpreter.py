@@ -55,6 +55,21 @@ async def test_valid_response_is_validated_and_returned() -> None:
     assert llm.calls[0][1]["rescue_id"] == "case_1"
 
 
+async def test_full_structured_payload_with_prompt_version_is_accepted() -> None:
+    """The real LLMClient returns the entire Interpretation dump, prompt_version
+    included; the interpreter must overwrite it instead of raising TypeError."""
+    payload = Interpretation(intent="OFFER_ACCEPT", confidence=0.91).model_dump()
+    assert payload["prompt_version"] == "interpreter_v1"
+    llm = FakeLLM([payload])
+    interpreter = MessageInterpreter(llm=llm, prompt_version="interpreter_v2")
+
+    result = await interpreter.interpret("sí voy", {})
+
+    assert result.intent == "OFFER_ACCEPT"
+    assert result.prompt_version == "interpreter_v2"
+    assert len(llm.calls) == 1  # no spurious retry, no fallback
+
+
 async def test_invalid_output_retried_once_with_validation_error() -> None:
     llm = FakeLLM([{**VALID, "intent": "NOPE"}, VALID])
     interpreter = MessageInterpreter(llm=llm)
