@@ -53,9 +53,13 @@ class TwilioInboundService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         orchestrator: Any,
+        scheduler: Any = None,
     ) -> None:
         self._sessions = session_factory
         self._orchestrator = orchestrator
+        # Exposed so the app lifespan can drive due jobs while Celery wiring
+        # lands (see the resilience / deploy features).
+        self.scheduler = scheduler
 
     async def handle(self, from_phone: str, message_sid: str, body: str) -> bool:
         from app.db.models import Employee
@@ -122,7 +126,7 @@ def get_twilio_service() -> TwilioInboundService:
         )
         for name, handler in orchestrator.task_handlers().items():
             scheduler.register(name, handler)
-        _service = TwilioInboundService(session_factory, orchestrator)
+        _service = TwilioInboundService(session_factory, orchestrator, scheduler)
     return _service
 
 
