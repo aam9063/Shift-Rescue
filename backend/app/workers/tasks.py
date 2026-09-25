@@ -1,6 +1,5 @@
 """Celery tasks: inbound orchestration, scheduled ticks, retention purge."""
 
-import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -9,6 +8,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.workers.async_runner import run_async
 from app.workers.celery_app import celery_app
 
 if TYPE_CHECKING:
@@ -49,7 +49,7 @@ def process_inbound_message(self: Any, from_phone: str, message_sid: str, body: 
     """
     from app.runtime import get_worker_runtime
 
-    handled = asyncio.run(get_worker_runtime().handle_inbound(from_phone, message_sid, body))
+    handled = run_async(get_worker_runtime().handle_inbound(from_phone, message_sid, body))
     logger.info("worker_inbound_processed", message_sid=message_sid, recognized=handled)
     return handled
 
@@ -64,7 +64,7 @@ def apply_approval_decision(approval_id: str, decision: str, decided_by: str) ->
     """
     from app.runtime import get_worker_runtime
 
-    asyncio.run(
+    run_async(
         get_worker_runtime().orchestrator.decide_approval(approval_id, decision, decided_by)
     )
     logger.info("worker_approval_applied", approval_id=approval_id, decision=decision)
@@ -76,7 +76,7 @@ def close_rescue_task(rescue_id: str, decided_by: str) -> bool:
     """Manual manager close in the worker (spec §7.5): same rule as approvals."""
     from app.runtime import get_worker_runtime
 
-    asyncio.run(get_worker_runtime().orchestrator.close_rescue(rescue_id, decided_by))
+    run_async(get_worker_runtime().orchestrator.close_rescue(rescue_id, decided_by))
     logger.info("worker_rescue_closed", rescue_id=rescue_id)
     return True
 
@@ -88,7 +88,7 @@ def run_due_jobs() -> int:
     from app.runtime import get_worker_runtime
 
     runtime = get_worker_runtime()
-    ran = asyncio.run(runtime.scheduler.run_due(SystemClock().now()))
+    ran = run_async(runtime.scheduler.run_due(SystemClock().now()))
     if ran:
         logger.info("scheduler_ran_jobs", count=ran)
     publish_runtime_snapshot(runtime)

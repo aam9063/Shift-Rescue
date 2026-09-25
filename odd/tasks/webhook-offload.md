@@ -65,7 +65,8 @@ construction currently inlined in `get_twilio_service()`.
 
 ### T2 — Celery tasks (`app/workers/tasks.py`)
 - `process_inbound_message(from_phone, message_sid, body)`: runs the async
-  service through `asyncio.run`, with bounded retries
+  service through `run_async` (`app/workers/async_runner.py`, one event loop
+  per worker process), with bounded retries
   (`max_retries=3`, exponential backoff, `acks_late` already on) for transient
   failures only. A duplicate `message_sid` must be harmless.
 - `run_due_jobs()`: ticks the worker scheduler and publishes the runtime
@@ -195,3 +196,49 @@ logged and swallowed so tracing never stops a worker boot). Covered by tests in
 `test_celery.py` (init configures with current settings, disabled is a no-op,
 failures swallowed) and `test_observability.py` (shutdown flushes, safe when
 never configured, failures swallowed).
+
+#### Production incident (2026-09-25): lost inbound message from the per-task event loop
+
+**Observed live** (worker log, reproduced minutes after the earlier green
+verification):
+
+```
+ERROR/ForkPoolWorker-8] Task app.workers.tasks.process_inbound_message[...]
+raised unexpected:
+RuntimeError("Task <Task pending name='Task-8688' coro=<RescueRuntime.handle_inbound()
+running at /app/app/runtime.py:63> cb=[_run_until_complete_cb()] > got Future
+<Future pending cb=[BaseProtocol._on_waiter_completed()]> attached to a different loop")
+```
+
+**Root cause**: `tasks.py` called `asyncio.run(...)` for every task, and
+`asyncio.run()` creates a new event loop per call and closes it on return,
+while `get_worker_runtime()` memoizes the SQLAlchemy async engine for the
+whole process. The engine's pooled asyncpg connections are bound to the loop
+that created them, so once a connection entered the pool under loop A, every
+later task running on loop B raised `got Future attached to a different loop`.
+
+**Why intermittent**: the first tasks after a worker restart succeed — the
+pool is empty, so connections are created on the task's own loop. The failure
+only appears once a task reuses a connection pooled under an earlier, closed
+loop. State-dependent, so the same stack passed its morning verification.
+
+**Consequence**: the inbound message was lost. The webhook had already
+answered 200 TwiML before the task ran (spec §7.5), so Twilio will not
+redeliver, and `RuntimeError` is not in the task's `autoretry_for` list.
+
+**Fix**: `app/workers/async_runner.py` — `run_async(coro)` lazily creates ONE
+event loop per process and reuses it via `run_until_complete`, so pooled
+connections always see the loop they were created on. Correct for a Celery
+prefork child (single thread per process); it is the single place that owns
+this rule. `tasks.py` routes all four task bodies through it. Regression test
+`tests/unit/test_worker_event_loop.py::test_two_consecutive_calls_reuse_a_pooled_connection`
+reproduces the failure with the old behaviour and passes with the fix; the
+full suite went from `375 passed, 2 skipped` (pre-fix baseline) to
+`380 passed, 2 skipped`.
+
+**Open follow-up (not fixed here, parent-tracked)**: a task that fails
+unexpectedly has no redelivery and no alert. `RuntimeError` is not retried
+(`autoretry_for` covers transient errors only) and nothing pages on repeated
+task failures — a lost message is discovered only when an employee reports
+it. Needs a dead-letter/alerting decision plus a redelivery strategy; do not
+grow this task to include it.
