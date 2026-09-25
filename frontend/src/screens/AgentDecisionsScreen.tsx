@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { decisionTime } from '../domain/decisions'
 import { useAgentDecisions } from '../services/dashboard'
 
 const FILTERS = [
@@ -63,7 +64,7 @@ function DecisionCard({
     <li className="rounded-card bg-surface px-4 py-3 shadow-card">
       <div className="flex items-baseline justify-between gap-3">
         <p className="text-sm font-semibold tracking-tight">{d.employeeName}</p>
-        <p className="text-sm text-text-secondary">{d.time}</p>
+        <p className="text-sm text-text-secondary">{decisionTime(d.time)}</p>
       </div>
       <p className="mt-1 text-sm font-medium tracking-tight">{d.intent}</p>
       <div className="mt-2">
@@ -178,7 +179,7 @@ export function AgentDecisionsScreen() {
           <tbody>
             {filtered.map((d) => (
               <tr key={`${d.time}-${d.employeeName}`} className="border-b border-black/5 last:border-0">
-                <td className="py-3 pr-4 text-sm text-text-secondary">{d.time}</td>
+                <td className="py-3 pr-4 text-sm text-text-secondary">{decisionTime(d.time)}</td>
                 <td className="py-3 pr-4 text-sm font-semibold tracking-tight">{d.employeeName}</td>
                 <td className="py-3 pr-4 text-sm font-medium tracking-tight">{d.intent}</td>
                 <td className="py-3 pr-4">

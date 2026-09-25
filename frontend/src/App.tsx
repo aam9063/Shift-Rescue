@@ -12,9 +12,26 @@ import { EvalsScreen } from './screens/EvalsScreen'
 import { SimulatorScreen } from './screens/SimulatorScreen'
 import { RequireAuth } from './components/RequireAuth'
 import { getSession } from './services/auth'
+import { ApiError } from './services/apiClient'
 import { usePendingApprovals } from './services/hooks'
 
-const queryClient = new QueryClient()
+/**
+ * Retry policy: never replay a client error. A 403 (wrong role) or a 404 answers
+ * the same however many times it is asked, so the default three retries only
+ * produced three extra red rows in the network tab for nothing. Transient
+ * failures (network, 5xx) still get two attempts.
+ */
+function shouldRetry(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false
+  return failureCount < 2
+}
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: shouldRetry, refetchOnWindowFocus: true },
+    mutations: { retry: false },
+  },
+})
 
 const VIEWS: readonly AppView[] = [
   'today',

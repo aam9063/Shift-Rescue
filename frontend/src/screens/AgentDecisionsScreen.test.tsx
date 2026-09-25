@@ -49,4 +49,5 @@ describe('AgentDecisionsScreen responsive contract', () => {
     const filter = await screen.findByRole('button', { name: 'Low confidence' })
     expect(filter).toHaveClass('pointer-coarse:min-h-11')
   })
+
 })
