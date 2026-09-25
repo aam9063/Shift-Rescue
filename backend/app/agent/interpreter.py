@@ -12,6 +12,8 @@ from pydantic import ValidationError
 from app.agent.schemas import Interpretation
 from app.ports import LLMClient
 
+PROMPT_VERSION = "interpreter_v2"
+
 FALLBACK = Interpretation(intent="UNCLEAR", confidence=0.0)
 
 
@@ -24,7 +26,7 @@ class MessageInterpreter:
         self,
         llm: LLMClient,
         *,
-        prompt_version: str = "interpreter_v1",
+        prompt_version: str = PROMPT_VERSION,
         confidence_threshold: float = 0.75,
         max_retries: int = 1,
     ) -> None:

@@ -54,5 +54,5 @@ capabilities (web search, fetch) that only widen the attack surface.
 - The golden-set eval gate (`intent accuracy ≥ 0.92`, `health detection ≥
   0.95`) only blocks CI when a real model is evaluated; the deterministic
   parser baseline is informational.
-- Prompts are versioned files (`app/agent/prompts/interpreter_v1.md`); the
+- Prompts are versioned files (`app/agent/prompts/interpreter_v1.md`, `interpreter_v2.md`); the
   version is stored with every `Interpretation` for reproducibility.

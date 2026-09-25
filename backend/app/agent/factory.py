@@ -15,7 +15,7 @@ from typing import Any
 
 import structlog
 
-from app.agent.interpreter import MessageInterpreter
+from app.agent.interpreter import PROMPT_VERSION, MessageInterpreter
 from app.core.config import Settings
 
 logger = structlog.get_logger(__name__)
@@ -156,9 +156,13 @@ def build_model(settings: Settings) -> Any:
     return builder(settings, model_id)
 
 
-def load_system_prompt() -> str:
-    """Interpreter prompt (baked into the image with the app package)."""
-    return (Path(__file__).parent / "prompts" / "interpreter_v1.md").read_text(encoding="utf-8")
+def load_system_prompt(version: str = PROMPT_VERSION) -> str:
+    """Interpreter prompt (baked into the image with the app package).
+
+    Prompt edits ship as a new versioned file: the version is recorded on every
+    interpretation, so a quality change is always attributable to a prompt.
+    """
+    return (Path(__file__).parent / "prompts" / f"{version}.md").read_text(encoding="utf-8")
 
 
 def build_interpreter(settings: Settings) -> MessageInterpreter | None:
@@ -198,7 +202,11 @@ def build_interpreter(settings: Settings) -> MessageInterpreter | None:
         model_id=model_id,
         price_per_1k=resolve_price(settings),
     )
-    return MessageInterpreter(llm=client, confidence_threshold=settings.llm_confidence_threshold)
+    return MessageInterpreter(
+        llm=client,
+        prompt_version=PROMPT_VERSION,
+        confidence_threshold=settings.llm_confidence_threshold,
+    )
 
 
 def describe_provider(settings: Settings) -> str:

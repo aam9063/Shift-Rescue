@@ -21,7 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
+from app.agent.interpreter import PROMPT_VERSION  # noqa: E402
 from app.domain.parser import Intent, parse_message  # noqa: E402
+from app.evals.thresholds import check_thresholds, load_thresholds  # noqa: E402
 
 
 class LLMInterpreterUnavailable(Exception):
@@ -30,11 +32,6 @@ class LLMInterpreterUnavailable(Exception):
 
 GOLDEN = Path(__file__).parent / "golden" / "interpreter_golden.jsonl"
 REPORTS = Path(__file__).parent / "reports"
-THRESHOLDS = {
-    "intent_accuracy_min": 0.92,
-    "health_detection_min": 0.95,
-    "conditional_time_accuracy_min": 0.80,
-}
 
 
 class ParserProvider:
@@ -184,15 +181,6 @@ async def run(provider) -> dict:
     }
 
 
-def check_thresholds(report: dict) -> list[str]:
-    violations = []
-    for key, minimum in THRESHOLDS.items():
-        value = report.get(key)
-        if value is not None and value < minimum:
-            violations.append(f"{key}: {value} < {minimum}")
-    return violations
-
-
 def git_sha() -> str:
     try:
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
@@ -218,7 +206,7 @@ async def main() -> int:
         {
             "git_sha": git_sha(),
             "ran_at": datetime.now(UTC).isoformat(),
-            "prompt_version": "interpreter_v1",
+            "prompt_version": PROMPT_VERSION,
         }
     )
 
@@ -236,7 +224,7 @@ async def main() -> int:
     print(f"Failures : {len(report['failures'])} (first 50 kept in report)")
 
     if args.provider != "parser":
-        violations = check_thresholds(report)
+        violations = check_thresholds(report, load_thresholds())
         if violations:
             print("THRESHOLD VIOLATIONS:", "; ".join(violations), file=sys.stderr)
             return 1

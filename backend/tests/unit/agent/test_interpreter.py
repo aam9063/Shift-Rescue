@@ -4,7 +4,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.agent.interpreter import MessageInterpreter
+from app.agent.interpreter import PROMPT_VERSION, MessageInterpreter
 from app.agent.schemas import Interpretation
 
 VALID = {
@@ -51,7 +51,7 @@ async def test_valid_response_is_validated_and_returned() -> None:
     assert isinstance(result, Interpretation)
     assert result.intent == "OFFER_ACCEPT"
     assert result.confidence == 0.97
-    assert result.prompt_version == "interpreter_v1"
+    assert result.prompt_version == PROMPT_VERSION
     assert llm.calls[0][1]["rescue_id"] == "case_1"
 
 
@@ -59,7 +59,7 @@ async def test_full_structured_payload_with_prompt_version_is_accepted() -> None
     """The real LLMClient returns the entire Interpretation dump, prompt_version
     included; the interpreter must overwrite it instead of raising TypeError."""
     payload = Interpretation(intent="OFFER_ACCEPT", confidence=0.91).model_dump()
-    assert payload["prompt_version"] == "interpreter_v1"
+    assert payload["prompt_version"] == PROMPT_VERSION
     llm = FakeLLM([payload])
     interpreter = MessageInterpreter(llm=llm, prompt_version="interpreter_v2")
 

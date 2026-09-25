@@ -240,9 +240,10 @@ the webhook's own critical path.
 
 ### Pending
 
-- Full eval run against the real model (`uv run python evals/runner.py
-  --provider interpreter`), which closes the accuracy thresholds in
-  `docs/eval-report.md`.
+- ~~Full eval run against the real model~~ — **done**, and it uncovered a broken
+  threshold gate plus a missing context key; the follow-up work is recorded in
+  `odd/tasks/interpreter-quality.md` (prompt v2: accuracy 0.9333, health 1.0,
+  times 0.85 — thresholds met).
 - Move the interpretation call off the webhook request path (Celery task per
   spec §7.5) — see the open deviation above.
 - Rotate the OpenAI key that was exposed in the session transcript: done by the
