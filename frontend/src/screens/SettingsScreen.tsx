@@ -14,6 +14,25 @@ const LEVEL_LABEL: Record<string, string> = {
 export function SettingsScreen() {
   const { settings, save, saved } = useSettings()
   const [draft, setDraft] = useState(settings)
+  // React's "adjust state when a prop changes" pattern. With live data the
+  // server values arrive after the first paint, so the draft follows the
+  // query data identity — never clobbering in-progress edits while a save is
+  // in flight (and a failed save keeps the operator's draft for retrying).
+  const [draftedFrom, setDraftedFrom] = useState(settings)
+  const [savePending, setSavePending] = useState(false)
+
+  if (settings !== draftedFrom && !savePending) {
+    setDraftedFrom(settings)
+    setDraft(settings)
+  }
+  if (saved && savePending) {
+    setSavePending(false)
+  }
+
+  const handleSave = () => {
+    setSavePending(true)
+    save(draft)
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -137,7 +156,7 @@ export function SettingsScreen() {
 
       <button
         type="button"
-        onClick={() => save(draft)}
+        onClick={handleSave}
         className="cursor-pointer rounded-pill bg-green-accent px-6 py-3 text-sm font-semibold tracking-tight text-white transition-all duration-200 active:scale-95"
       >
         Save changes

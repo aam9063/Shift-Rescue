@@ -53,6 +53,9 @@ export interface AppHeaderProps {
   onNavigate: (view: AppView) => void
   pendingApprovals: number
   locationName?: string
+  managerName?: string
+  managerRole?: string
+  onLogout?: () => void
 }
 
 /**
@@ -65,6 +68,9 @@ export function AppHeader({
   onNavigate,
   pendingApprovals,
   locationName = 'La Terraza del Puerto',
+  managerName,
+  managerRole,
+  onLogout,
 }: AppHeaderProps): ReactNode {
   return (
     <header role="banner" className="bg-green-house text-white">
@@ -114,6 +120,23 @@ export function AppHeader({
           >
             Demo simulator
           </button>
+          {onLogout && (
+            <div className="flex items-center gap-3 border-l border-white/20 pl-4">
+              {managerName && (
+                <span className="hidden text-sm tracking-tight text-white/80 xl:block">
+                  {managerName}
+                  {managerRole ? ` · ${managerRole}` : ''}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={onLogout}
+                className="cursor-pointer text-sm font-semibold tracking-tight text-white/80 transition-colors hover:text-white"
+              >
+                Log out
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

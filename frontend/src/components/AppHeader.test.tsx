@@ -32,12 +32,30 @@ describe('AppHeader (dark-green band per user mockups)', () => {
     renderHeader({ pendingApprovals: 2 })
     expect(screen.getByText('2')).toBeInTheDocument()
   })
+
+  it('calls onLogout when Log out is clicked and shows the signed-in manager', async () => {
+    const onLogout = vi.fn()
+    const user = userEvent.setup()
+    renderHeader({ onLogout, managerName: 'Demo Manager', managerRole: 'manager' })
+
+    expect(screen.getByText('Demo Manager · manager')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Log out' }))
+    expect(onLogout).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders no logout action when onLogout is not provided', () => {
+    renderHeader()
+    expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument()
+  })
 })
 
 function renderHeader(
   props: {
     onNavigate?: (v: any) => void
     pendingApprovals?: number
+    managerName?: string
+    managerRole?: string
+    onLogout?: () => void
   } = {},
 ) {
   return renderWithProviders(
@@ -45,6 +63,9 @@ function renderHeader(
       currentView="today"
       onNavigate={props.onNavigate ?? (() => {})}
       pendingApprovals={props.pendingApprovals ?? 0}
+      managerName={props.managerName}
+      managerRole={props.managerRole}
+      onLogout={props.onLogout}
     />,
   )
 }

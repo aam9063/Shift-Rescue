@@ -49,6 +49,28 @@ Failed logins are always a generic `401 {"detail":"Invalid email or password"}`
 — the API never reveals whether the email exists. Missing, expired or tampered
 tokens answer `401`; the wrong role answers `403`.
 
+### Using the dashboard (SPA)
+
+The dashboard asks for the same demo credentials on its login screen
+(`manager@laterraza.demo` / `laterraza-demo-2026`, or the operator account for
+the Agent-decisions screen, which requires the `operator` role). The session
+(token + manager profile) lives in the browser's `localStorage`; any 401 from
+an API call clears it and returns the user to the login screen.
+
+Two Vite env vars (see `frontend/.env.example`) control how the SPA reaches
+the API:
+
+| Variable | Meaning |
+|---|---|
+| `VITE_API_BASE_URL` | API base URL. Empty (default) = same origin: the Vite dev proxy (`/api` → `http://localhost:8000`) and the deployed Caddy setup both serve the API from the web origin, so no CORS is needed. |
+| `VITE_USE_MOCK` | Set to `true` to run the dashboard fully offline on mock data (offline demo mode; the test suite forces this). Any other value uses the live API. |
+
+**Approvals are enqueued, not applied inline:** approve/reject answers `202`
+and the Celery worker applies the decision. The dashboard invalidates its
+queries after the POST, so the new state appears on the next refetch — typically
+a second or two after the click, once the worker has run. If it never appears,
+check the worker container (§4).
+
 ### CORS origins
 
 The API allows **exactly** the origins in `CORS_ORIGINS` (comma-separated;

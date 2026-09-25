@@ -165,3 +165,87 @@ Deviations/limits:
 - Langfuse trace links require a stored `trace_id`; none is persisted yet, so the
   detail returns `traceUrl: null` (nothing invented).
 - Health details/unredacted bodies: asserted per response in the endpoint tests.
+
+## Frontend slice (dashboard connected to the live API)
+
+Implemented on `feature/dashboard-live` (worker delegation, parent task
+"Connect the dashboard to the real API"):
+
+- `services/auth.ts`: token session in `localStorage` (one key),
+  `getToken`/`setSession`/`clearSession`/`isAuthenticated`, `login()` against
+  `POST /api/auth/login`; a `shift-rescue:session-expired` window event is the
+  single "back to login" signal. No password/token is ever logged.
+- `services/apiClient.ts`: base URL from `VITE_API_BASE_URL` (empty = same
+  origin via the Vite proxy / Caddy), bearer token when a session exists,
+  non-2xx → `ApiError` (status + safe message), network failure → `NetworkError`
+  (offline), 401 always clears the session.
+- `services/api.ts`: `ApiDashboardDataSource implements DashboardDataSource`
+  plus the second data layer (conversations + messages, interpretations,
+  metrics, settings get/patch, public `/api/status`). The location is resolved
+  once from `GET /api/locations` (memoized, never the hardcoded literal) and
+  reused; `decideApproval` POSTs approve/reject and accepts the 202 queued body.
+  Wire payloads are mapped to the existing frontend types; no `any` escapes.
+- `services/dataSource.ts` + `hooks.ts` + `dashboard.ts`: the seam returns the
+  API source by default and the mock when `VITE_USE_MOCK === 'true'` (offline
+  demo + hermetic tests; vitest forces the mock via `test.env`). Every hook
+  that read a `dashboardMock` constant now reads the API; query keys and
+  result shapes are unchanged. The Evals screen keeps its mock (no
+  `/api/evals/runs*` endpoint exists). `dashboardMock.ts` stays as the fixture.
+- `screens/LoginScreen.tsx`, `components/RequireAuth.tsx`, `App.tsx`: login
+  form with demo credentials, distinct wrong-credential vs offline errors;
+  `RequireAuth` guards the app and reacts to the 401 event; the current view is
+  persisted in the URL hash so deep links survive the login round-trip.
+- `vite.config.ts`: dev proxy `/api` → `http://localhost:8000`; `test.env`
+  pins `VITE_USE_MOCK=true`.
+- `docs/runbook.md` §0: dashboard login, env vars, enqueued (202) approvals.
+
+### Final state of the frontend slice (recorded after the header/logout fixes)
+
+**Live (API-backed):** login/JWT session with logout in the header (the header
+shows the signed-in manager's name and role when provided); Today, Approvals
+(decisions enqueued via 202), Conversations, Ops metrics, Agent decisions,
+Settings (read + PATCH, with the draft following the loaded settings — the form
+no longer seeds once and can overwrite server values), and the degraded-status
+banner from the public `/api/status`.
+
+**Still mock and why:**
+
+- **Evals**: no `/api/evals/runs*` endpoint exists (explicitly deferred), so the
+  screen keeps mock data and now says so in the UI ("eval data is not live yet").
+- **Demo simulator**: feeds the mock data source on purpose (spec §7.6 screen 8).
+- `dashboardMock.ts` stays as the fixture for tests and offline demos.
+
+**Offline mode:** `VITE_USE_MOCK=true` switches every hook to the mock data
+source (`services/dataSource.ts`), so the whole dashboard runs without the API
+(offline demos and hermetic tests; `test.env` pins it for vitest). The default
+(`false`/unset) talks to the live API.
+
+**Agent decisions screen requires the operator account:**
+`GET /api/interpretations*` is gated by `require_role("operator")` (spec §7.5),
+so a `manager` login gets **403** on it and the screen cannot show real data —
+sign in with the operator credentials to use it.
+
+**Header/logout additions:** `AppHeader` gained optional `onLogout` /
+`managerName` / `managerRole` props; `RequireAuth` hands the signed-in shell a
+`signOut` callback (clears the session and returns to login) while still
+accepting plain node children.
+
+**Settings draft-sync defect fixed:** the form seeded its draft once with
+`useState(settings)`, so with live data the server values arrived after the
+first paint and a save could overwrite them. The draft now follows the query
+data identity (React's adjust-state-when-a-prop-changes pattern) and never
+clobbers in-progress edits while a save is pending.
+
+Checks after these fixes (all green):
+
+1. `cd frontend && pnpm vitest run` → `Test Files 17 passed (17)`, `Tests 119 passed (119)`.
+2. `cd frontend && pnpm build` → `✓ built in 137ms`.
+3. `cd frontend && pnpm lint` → `oxlint`, exit 0, no findings or warnings.
+4. `cd frontend && npx tsc --noEmit -p tsconfig.app.json` → clean.
+
+Checks (all green):
+
+1. `cd frontend && pnpm vitest run` → `Test Files 16 passed (16)`, `Tests 113 passed (113)` (83 pre-existing + 30 new).
+2. `cd frontend && pnpm build` → `✓ built in 138ms`.
+3. `cd frontend && pnpm lint` → `oxlint`, exit 0, no findings.
+4. `cd frontend && npx tsc --noEmit -p tsconfig.app.json` → clean.

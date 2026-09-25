@@ -31,6 +31,11 @@ export function EvalsScreen() {
         </span>
       </div>
 
+      <p className="text-sm tracking-tight text-text-secondary">
+        Note: eval data is not live yet — the runs endpoint is not implemented, so this
+        screen shows mock results.
+      </p>
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="space-y-4 rounded-card bg-surface p-6 shadow-card lg:col-span-3">
           <h2 className="text-lg font-semibold tracking-tight">

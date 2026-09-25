@@ -14,17 +14,30 @@ import {
   type SystemStatus,
   systemStatusSource,
 } from './dashboardMock'
+import {
+  fetchAgentDecisions,
+  fetchConversations,
+  fetchOpsMetrics,
+  fetchSettings,
+  fetchSystemStatus,
+  saveSettings,
+} from './api'
+import { isMockMode } from './dataSource'
 
 /**
- * Mock-backed dashboard data (mockups in public/img). Later slices swap this
- * module for the REST API client; components only consume these hooks.
+ * Second data layer hooks (conversations, agent decisions, Ops metrics,
+ * settings, system status). Live data comes from the API; in mock mode the
+ * `dashboardMock` constants keep the screens working offline and hermetic in
+ * tests. Query keys and result shapes stay compatible with the screens.
  */
+
+const LIVE_STALE_TIME_MS = 30_000
 
 export function useConversations(): { conversations: Conversation[] } {
   const query = useQuery({
     queryKey: ['conversations'],
-    queryFn: async () => CONVERSATIONS,
-    staleTime: Infinity,
+    queryFn: isMockMode() ? async () => CONVERSATIONS : fetchConversations,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
   return { conversations: query.data ?? [] }
 }
@@ -32,14 +45,16 @@ export function useConversations(): { conversations: Conversation[] } {
 export function useAgentDecisions(): { decisions: AgentDecision[] } {
   const query = useQuery({
     queryKey: ['agent-decisions'],
-    queryFn: async () => AGENT_DECISIONS,
-    staleTime: Infinity,
+    queryFn: isMockMode() ? async () => AGENT_DECISIONS : fetchAgentDecisions,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
   return { decisions: query.data ?? [] }
 }
 
 export function useEvalRun(): { evalRun: EvalRunSummary | undefined } {
   const query = useQuery({
+    // No `/api/evals/runs*` endpoint exists yet: the Evals screen stays on
+    // mock data and says so in the UI.
     queryKey: ['eval-run'],
     queryFn: async () => EVAL_RUN,
     staleTime: Infinity,
@@ -50,8 +65,8 @@ export function useEvalRun(): { evalRun: EvalRunSummary | undefined } {
 export function useOpsMetrics(): { metrics: OpsMetrics | undefined } {
   const query = useQuery({
     queryKey: ['ops-metrics'],
-    queryFn: async () => OPS_METRICS,
-    staleTime: Infinity,
+    queryFn: isMockMode() ? async () => OPS_METRICS : fetchOpsMetrics,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
   return { metrics: query.data }
 }
@@ -62,13 +77,16 @@ export function useSettings(): {
   saved: boolean
 } {
   const queryClient = useQueryClient()
+  const mockMode = isMockMode()
   const query = useQuery({
     queryKey: ['settings'],
-    queryFn: async () => DEFAULT_SETTINGS,
-    staleTime: Infinity,
+    queryFn: mockMode ? async () => DEFAULT_SETTINGS : fetchSettings,
+    staleTime: mockMode ? Infinity : LIVE_STALE_TIME_MS,
   })
   const mutation = useMutation({
-    mutationFn: async (next: LocationSettings) => next,
+    mutationFn: mockMode
+      ? async (next: LocationSettings) => next
+      : async (next: LocationSettings) => saveSettings(next),
     onSuccess: (saved) => {
       queryClient.setQueryData(['settings'], saved)
     },
@@ -83,7 +101,8 @@ export function useSettings(): {
 export function useSystemStatus(): { status: SystemStatus | undefined } {
   const query = useQuery({
     queryKey: ['system-status'],
-    queryFn: () => systemStatusSource.get(),
+    // `/api/status` is public, so the degraded banner works pre-login too.
+    queryFn: isMockMode() ? () => systemStatusSource.get() : fetchSystemStatus,
     staleTime: 0,
   })
   return { status: query.data }

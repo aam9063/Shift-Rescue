@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ApprovalRequest, RescueCase, RescueDetail, Shift } from '../domain/types'
-import { MockDashboardDataSource, type DashboardDataSource } from './mock'
+import { dataSource } from './dataSource'
+
+export { dataSource } from './dataSource'
 
 /**
- * Single source instance for the app; swap for the API-backed implementation
- * when the backend lands. Components never import the mock directly.
+ * Rescue-flow hooks (shifts, rescues, approvals) reading through the data
+ * source seam: the API by default, the mock in offline mode. Components never
+ * import the mock directly.
  */
-export const dataSource: DashboardDataSource = new MockDashboardDataSource()
 
 export function useTodayShifts(dayIso: string): { shifts: Shift[] | undefined; isLoading: boolean } {
   const query = useQuery({
@@ -49,7 +51,8 @@ export function useDecideApproval(): {
     mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
       dataSource.decideApproval(id, decision, 'manager_01'),
     onSuccess: () => {
-      // The decision also affects the rescue detail (approval timeline).
+      // The API answers 202 (enqueued); the worker applies the decision, so
+      // the UI refetches rather than expecting the new state immediately.
       void queryClient.invalidateQueries({ queryKey: ['approvals'] })
       void queryClient.invalidateQueries({ queryKey: ['rescues'] })
     },
