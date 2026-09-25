@@ -1,26 +1,29 @@
-"""Webhook endpoint tests (spec §7.5): signature validation, routing and
-status callbacks."""
+"""Webhook endpoint tests (spec §7.5): signature validation, enqueue-and-return,
+latency, and status callbacks. No orchestrator lives in the API process."""
 
 import base64
 import hashlib
 import hmac
-from typing import Any
+import os
+import tempfile
+import time
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from structlog.testing import capture_logs
 
 import app.api.webhooks_twilio as webhooks_twilio
 from app.api.webhooks_twilio import (
-    TwilioInboundService,
-    get_twilio_service,
+    TwilioStatusService,
+    get_status_service,
 )
 from app.api.webhooks_twilio import (
     router as twilio_router,
 )
-from app.db.models import Base, Employee, Message
+from app.db.models import Base, Message
 
 AUTH_TOKEN = "test_auth_token"
 URL = "http://testserver/webhooks/twilio/inbound"
@@ -33,17 +36,17 @@ def sign(url: str, params: dict[str, str], token: str = AUTH_TOKEN) -> str:
     return base64.b64encode(hmac.new(token.encode(), data, hashlib.sha1).digest()).decode()
 
 
-class FakeService:
+class StubTask:
+    """Stand-in for the Celery task: records `.delay` calls, can fail."""
+
     def __init__(self) -> None:
-        self.inbound: list[tuple[str, str, str]] = []
-        self.statuses: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
+        self.error: Exception | None = None
 
-    async def handle(self, from_phone: str, message_sid: str, body: str) -> bool:
-        self.inbound.append((from_phone, message_sid, body))
-        return True
-
-    async def update_status(self, message_sid: str, status: str) -> None:
-        self.statuses.append((message_sid, status))
+    def delay(self, from_phone: str, message_sid: str, body: str) -> None:
+        if self.error is not None:
+            raise self.error
+        self.calls.append((from_phone, message_sid, body))
 
 
 @pytest.fixture()
@@ -56,29 +59,32 @@ def client(monkeypatch):
 
     app = FastAPI()
     app.include_router(twilio_router)
-    service = FakeService()
-    app.dependency_overrides[get_twilio_service] = lambda: service
+    stub = StubTask()
+    monkeypatch.setattr(webhooks_twilio, "process_inbound_message", stub)
     client = TestClient(app)
-    client.fake_service = service  # type: ignore[attr-defined]
+    client.stub_task = stub  # type: ignore[attr-defined]
     return client
 
 
-def test_inbound_with_valid_signature_is_accepted(client) -> None:
+def test_inbound_enqueues_exactly_once_and_answers_fast(client) -> None:
     params = {
         "Body": "hola, hoy no puedo ir",
         "From": "whatsapp:+34600000001",
         "MessageSid": "SM111",
     }
+    start = time.perf_counter()
     response = client.post(
         "/webhooks/twilio/inbound",
         data=params,
         headers={"X-Twilio-Signature": sign(URL, params)},
     )
+    elapsed = time.perf_counter() - start
+
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/xml")
-    assert client.fake_service.inbound == [
-        ("+34600000001", "SM111", "hola, hoy no puedo ir")
-    ]
+    # Spec §7.5: the webhook answers in well under 200 ms with a stubbed enqueue.
+    assert elapsed < 0.2
+    assert client.stub_task.calls == [("+34600000001", "SM111", "hola, hoy no puedo ir")]
 
 
 def test_inbound_with_invalid_signature_is_rejected(client) -> None:
@@ -88,7 +94,7 @@ def test_inbound_with_invalid_signature_is_rejected(client) -> None:
         headers={"X-Twilio-Signature": "forged"},
     )
     assert response.status_code == 403
-    assert client.fake_service.inbound == []
+    assert client.stub_task.calls == []
 
 
 def test_inbound_without_signature_is_rejected(client) -> None:
@@ -97,6 +103,7 @@ def test_inbound_without_signature_is_rejected(client) -> None:
         data={"Body": "hola", "From": "whatsapp:+34600000001", "MessageSid": "SM1"},
     )
     assert response.status_code == 403
+    assert client.stub_task.calls == []
 
 
 def test_inbound_behind_a_tls_proxy_uses_the_forwarded_public_url(client) -> None:
@@ -116,34 +123,30 @@ def test_inbound_behind_a_tls_proxy_uses_the_forwarded_public_url(client) -> Non
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/xml")
-    assert client.fake_service.inbound == [("+34600000001", "SM999", "hola")]
+    assert client.stub_task.calls == [("+34600000001", "SM999", "hola")]
 
 
-def test_status_callback_updates_delivery(client) -> None:
-    params = {"MessageSid": "SM111", "MessageStatus": "delivered"}
-    response = client.post(
-        "/webhooks/twilio/status",
-        data=params,
-        headers={"X-Twilio-Signature": sign("http://testserver/webhooks/twilio/status", params)},
-    )
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/xml")
-    assert client.fake_service.statuses == [("SM111", "delivered")]
+def test_inbound_enqueue_failure_returns_500_and_logs(client) -> None:
+    """A broker rejection must never drop the message as a silent 200."""
+    client.stub_task.error = RuntimeError("broker down")
+    params = {"Body": "hola", "From": "whatsapp:+34600000001", "MessageSid": "SM500"}
 
+    with capture_logs() as logs:
+        response = client.post(
+            "/webhooks/twilio/inbound",
+            data=params,
+            headers={"X-Twilio-Signature": sign(URL, params)},
+        )
 
-class FakeOrchestrator:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    async def handle_inbound(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    assert response.status_code == 500
+    errors = [entry for entry in logs if entry["event"] == "twilio_inbound_enqueue_failed"]
+    assert len(errors) == 1
+    assert errors[0]["message_sid"] == "SM500"
+    assert "broker down" in errors[0]["error"]
 
 
 @pytest.fixture()
-async def service_world():
-    import os
-    import tempfile
-
+async def status_world():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
@@ -151,21 +154,6 @@ async def service_world():
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        session.add(
-            Employee(
-                id="emp_1",
-                location_id="loc",
-                full_name="Marta L.",
-                phone_e164="+34600000001",
-                language="es",
-                roles=["floor"],
-                contract_weekly_hours=30,
-                max_weekly_hours=40,
-                home_zone="port",
-                accepts_extra_shifts=True,
-                active=True,
-            )
-        )
         session.add(
             Message(
                 id="msg_out_1",
@@ -178,35 +166,29 @@ async def service_world():
             )
         )
         await session.commit()
-    yield factory, FakeOrchestrator()
+    yield factory
     await engine.dispose()
 
 
-async def test_service_routes_inbound_to_the_orchestrator(service_world) -> None:
-    factory, orchestrator = service_world
-    service = TwilioInboundService(factory, orchestrator)
+class FakeStatusService:
+    def __init__(self) -> None:
+        self.statuses: list[tuple[str, str]] = []
 
-    handled = await service.handle("+34600000001", "SM222", "sí")
-
-    assert handled is True
-    assert orchestrator.calls[0]["employee_id"] == "emp_1"
-    assert orchestrator.calls[0]["provider_message_id"] == "SM222"
-    assert orchestrator.calls[0]["conversation_id"] == "conv_twilio_+34600000001"
+    async def update_status(self, message_sid: str, status: str) -> None:
+        self.statuses.append((message_sid, status))
 
 
-async def test_service_ignores_unknown_senders(service_world) -> None:
-    factory, orchestrator = service_world
-    service = TwilioInboundService(factory, orchestrator)
-
-    handled = await service.handle("+34999999999", "SM333", "hola")
-
-    assert handled is False
-    assert orchestrator.calls == []
+@pytest.fixture()
+def status_client(client):
+    fake = FakeStatusService()
+    client.app.dependency_overrides[get_status_service] = lambda: fake
+    client.fake_status_service = fake  # type: ignore[attr-defined]
+    return client
 
 
-async def test_service_updates_delivery_status(service_world) -> None:
-    factory, orchestrator = service_world
-    service = TwilioInboundService(factory, orchestrator)
+async def test_status_service_updates_delivery_status(status_world) -> None:
+    factory = status_world
+    service = TwilioStatusService(factory)
 
     await service.update_status("SM111", "delivered")
 
@@ -217,40 +199,38 @@ async def test_service_updates_delivery_status(service_world) -> None:
         assert message.delivery_status == "delivered"
 
 
-# --- runtime injection: the LLM path (ADR-004, fail-closed) ------------------
+async def test_status_service_ignores_unknown_messages(status_world) -> None:
+    factory = status_world
+    service = TwilioStatusService(factory)
+
+    await service.update_status("SM_UNKNOWN", "delivered")  # no raise
+
+    async with factory() as session:
+        message = (
+            await session.execute(select(Message).where(Message.provider_message_id == "SM111"))
+        ).scalar_one()
+        assert message.delivery_status == "sent"
 
 
-def _reset_runtime_service(monkeypatch) -> None:
-    """Force get_twilio_service to rebuild (it memoizes a module singleton)."""
-    monkeypatch.setattr(webhooks_twilio, "_service", None)
+def test_status_callback_updates_delivery(status_client) -> None:
+    params = {"MessageSid": "SM111", "MessageStatus": "delivered"}
+    response = status_client.post(
+        "/webhooks/twilio/status",
+        data=params,
+        headers={
+            "X-Twilio-Signature": sign("http://testserver/webhooks/twilio/status", params)
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert status_client.fake_status_service.statuses == [("SM111", "delivered")]
 
 
-@pytest.fixture()
-def runtime_world(monkeypatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite://")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("LLM_PROVIDER", "none")
-    get_settings.cache_clear()
-    _reset_runtime_service(monkeypatch)
-    yield
-    _reset_runtime_service(monkeypatch)
-    get_settings.cache_clear()
-
-
-def test_service_factory_degrades_without_a_provider(runtime_world) -> None:
-    """LLM_PROVIDER=none: the orchestrator still builds, interpreter is None."""
-    service = get_twilio_service()
-
-    assert service._orchestrator.interpreter is None
-
-
-def test_service_factory_injects_a_stubbed_interpreter(runtime_world, monkeypatch) -> None:
-    stub = object()
-    monkeypatch.setattr(webhooks_twilio, "build_interpreter", lambda _settings: stub)
-
-    service = get_twilio_service()
-
-    assert service._orchestrator.interpreter is stub
+def test_status_callback_signature_is_enforced(status_client) -> None:
+    response = status_client.post(
+        "/webhooks/twilio/status",
+        data={"MessageSid": "SM111", "MessageStatus": "delivered"},
+        headers={"X-Twilio-Signature": "forged"},
+    )
+    assert response.status_code == 403
+    assert status_client.fake_status_service.statuses == []

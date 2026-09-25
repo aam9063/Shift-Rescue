@@ -108,6 +108,37 @@ one line stating that the worker owns scheduling.
   gets no reply; `docs/adr/ADR-004` deviation marked closed; spec §7.5
   compliance note.
 
+### Parent live verification (real stack, real keys)
+
+`docker compose -f infra/docker-compose.yml up -d --build api worker beat`, then
+three signed webhook requests from a script (Twilio HMAC signature computed from
+the real auth token, employee `emp_09_floor` mapped to a real phone):
+
+| Observation | Result |
+| --- | --- |
+| `POST /webhooks/twilio/inbound` latency | **50.3 ms** (cold), **15.0 ms** and **19.8 ms** (warm) — budget is 200 ms |
+| Worker handling (off the request path) | `worker_inbound_processed ... recognized=True`, ~2.9 s per message |
+| Concurrency | two worker children processed two messages in parallel without event-loop or pool errors |
+| Beat | `run_due_jobs` ticked every 5 s (`succeeded in 0.0033s`) |
+| API process | logs `scheduling_owned_by_worker`; no orchestrator, no ticker |
+| Langfuse after the tracing fix | 4 observations exported from the worker for one message: `invoke_agent Strands Agents` (SPAN), `chat` (GENERATION), `execute_event_loop_cycle` (SPAN), `Interpretation` (TOOL) |
+| Final suite | `296 passed, 2 skipped`, ruff clean, mypy clean (53 files) |
+
+Acceptance criteria 1, 2, 3, 5 and 6 verified live or by test. Criterion 4
+(`/api/status` from configuration plus the published snapshot) is covered by
+unit tests with fakes; it was not exercised against a live Redis snapshot in
+this pass.
+
+### Follow-up found while verifying (not fixed here)
+
+The `interpretation` table is never written by any service: `grep` over
+`app/` shows the SQLAlchemy model at `app/db/models.py:165` and no writer, and
+a live run recorded 0 rows while the LLM answered correctly. The "Agent
+decisions" screen therefore has no real data source yet (it renders mock data).
+This predates the offload and needs its own work unit: persist each
+interpretation (intent, confidence, model, prompt version, cost, latency,
+validation result) with a link to its Langfuse trace.
+
 ## Acceptance criteria
 
 1. `POST /webhooks/twilio/inbound` returns 200 in well under 200 ms with the
@@ -122,4 +153,45 @@ one line stating that the worker owns scheduling.
 
 ## Verification evidence
 
-_Pending — recorded as each task closes._
+Recorded 2026-09-25 on `feature/webhook-offload` (worker offload T1–T7):
+
+- `cd backend && uv run pytest -q` → `290 passed, 2 skipped in 21.12s`
+  (2 skips are the PostgreSQL integration tests without `DATABASE_URL`).
+- `cd backend && uv run ruff check .` → `All checks passed!`
+- `cd backend && uv run mypy app` → `Success: no issues found in 52 source files`
+- `cd backend && uv run python -c "from app.workers.celery_app import
+  celery_app; print(sorted(celery_app.conf.beat_schedule or {}))"` →
+  `['purge-old-messages', 'run-due-jobs']` — both entries present.
+- `cd backend && uv run python -c "from app.api.webhooks_twilio import router;
+  print([r.path for r in router.routes])"` →
+  `['/webhooks/twilio/inbound', '/webhooks/twilio/status']` — both routes kept.
+- Measured inbound webhook latency (TestClient, signature validated, enqueue
+  stubbed, 10 calls after warm-up): 1.2–1.7 ms per request, max **1.7 ms** —
+  well under the 200 ms budget of spec §7.5. The worker-side latency (LLM call,
+  1–3 s) is off the request path by construction: the task body runs through
+  `asyncio.run(get_worker_runtime().handle_inbound(...))`.
+- Not verified live here (parent owns the terminal): a real WhatsApp message
+  through `docker compose up -d` with worker + beat running, and Redis
+  snapshot round-trip against a live broker — unit tests cover both via fakes
+  and the parent will verify live afterwards.
+
+### Regression found in live verification (2026-09-25)
+
+The live run confirmed the offload itself: the webhook answered in 50 ms / 15 ms
+(budget 200 ms), two messages were processed concurrently by two preforked
+worker children with no event-loop errors, and beat ticked `run_due_jobs` every
+5 s. It also exposed a defect invisible to the unit suite: **real
+interpretation calls produced no Langfuse traces** (0 observations in the 15
+minutes after two real messages), because `configure_tracing()` ran only in the
+FastAPI lifespan and the worker never installed a `TracerProvider`.
+
+Fix: `app/workers/tracing_bootstrap.py` connects to Celery's
+`worker_process_init` (a provider inherited across a fork is not usable — its
+`BatchSpanProcessor` exporter thread and locks do not survive `fork` — so every
+child installs its own) and `worker_process_shutdown` (flush buffered spans
+before exit; a lost batch is lost data). Imported from `celery_app.py` so any
+worker loads it; tolerant by design (tracing disabled is a no-op, failures are
+logged and swallowed so tracing never stops a worker boot). Covered by tests in
+`test_celery.py` (init configures with current settings, disabled is a no-op,
+failures swallowed) and `test_observability.py` (shutdown flushes, safe when
+never configured, failures swallowed).

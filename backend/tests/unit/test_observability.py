@@ -3,10 +3,12 @@ masking, structured log enrichment, TracerProvider installation."""
 
 import opentelemetry.trace as trace
 import pytest
+from celery.signals import worker_process_shutdown
 from opentelemetry.sdk.trace import TracerProvider
 from structlog.testing import capture_logs
 
 import app.observability.tracing as tracing
+import app.workers.tracing_bootstrap as bootstrap
 from app.core.config import Settings
 from app.observability.redaction import mask_phone
 from app.observability.tracing import (
@@ -160,3 +162,43 @@ def test_shutdown_tracing_flushes_and_shuts_down_installed_provider() -> None:
 def test_shutdown_tracing_is_safe_when_never_configured() -> None:
     shutdown_tracing()  # must not raise
     assert tracing._tracer_provider is None
+
+
+# --- worker tracing bootstrap (Celery worker owns the LLM call, spec §9.1) ----
+
+
+def test_worker_shutdown_handler_flushes_tracing(monkeypatch) -> None:
+    calls: list[bool] = []
+    monkeypatch.setattr(bootstrap, "shutdown_tracing", lambda: calls.append(True))
+
+    results = worker_process_shutdown.send(sender=None)
+
+    assert any(r.__name__ == "_flush_worker_tracing" for r, _ in results)
+    assert calls == [True]
+
+
+def test_worker_shutdown_handler_is_safe_when_tracing_was_never_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(tracing, "_tracer_provider", None)  # never configured
+
+    with capture_logs() as logs:
+        worker_process_shutdown.send(sender=None)  # no-op, must not raise
+
+    assert not any(
+        e["event"] == "worker_tracing_shutdown_failed" for e in logs
+    )
+
+
+def test_worker_shutdown_handler_swallows_flush_failures(monkeypatch) -> None:
+    def boom() -> None:
+        raise RuntimeError("flush exploded")
+
+    monkeypatch.setattr(bootstrap, "shutdown_tracing", boom)
+
+    with capture_logs() as logs:
+        worker_process_shutdown.send(sender=None)  # never raise
+
+    failures = [e for e in logs if e["event"] == "worker_tracing_shutdown_failed"]
+    assert len(failures) == 1
+    assert "flush exploded" in failures[0]["error"]

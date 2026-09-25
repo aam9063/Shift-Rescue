@@ -1,6 +1,5 @@
 """FastAPI application factory (spec §7.2)."""
 
-import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 
@@ -14,44 +13,20 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.observability.tracing import configure_tracing, shutdown_tracing
 
-SCHEDULER_TICK_SECONDS = 5
-
-
-async def _scheduler_ticker() -> None:
-    """Drives scheduled rescue work (wave timeouts, deadlines, approvals).
-
-    The Celery beat schedule takes over in production; until then the API
-    process ticks the in-memory scheduler so timeouts actually fire.
-    """
-    from app.api.webhooks_twilio import get_twilio_service
-    from app.core.clock import SystemClock
-
-    logger = structlog.get_logger(__name__)
-    while True:
-        await asyncio.sleep(SCHEDULER_TICK_SECONDS)
-        try:
-            service = get_twilio_service()
-            scheduler = getattr(service, "scheduler", None)
-            if scheduler is None:
-                continue
-            ran = await scheduler.run_due(SystemClock().now())
-            if ran:
-                logger.info("scheduler_ran_jobs", count=ran)
-        except Exception as error:  # never let the ticker die
-            logger.warning("scheduler_tick_failed", error=str(error)[:200])
-
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_tracing(settings)
-    ticker = asyncio.create_task(_scheduler_ticker())
+    # The API owns no scheduling: Celery beat ticks `run_due_jobs` every 5 s
+    # and the worker runs the daily retention purge (spec §7.2/§7.3).
+    structlog.get_logger(__name__).info(
+        "scheduling_owned_by_worker",
+        detail="Celery beat drives scheduled rescue work (run-due-jobs every 5s)",
+    )
     try:
         yield
     finally:
-        ticker.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await ticker
         shutdown_tracing()
 
 

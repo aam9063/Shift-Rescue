@@ -74,9 +74,9 @@ OpenAI-compatible gateway (NaN), which stays reachable without a code change.
   settings update, and the numbers are estimates for cost control, not billing.
   Prompt-cache discounts are not applied, so the reported cost is a conservative
   upper bound (measured: ~1024 of ~1150 input tokens are cache reads).
-- **Open deviation (spec §7.5):** the inbound Twilio webhook now awaits the
-  interpretation call, so it takes 1–3 s instead of the specified < 200 ms with
-  an enqueued job. Twilio's own timeout is 15 s, so the demo works, but moving
-  the interpretation off the request path (Celery task, as spec §7.5 requires)
-  is the next step for production readiness and is tracked in
-  `odd/tasks/llm-runtime-wiring.md`.
+- **Closed deviation (spec §7.5):** the inbound Twilio webhook no longer awaits
+  the interpretation. It validates the signature and enqueues
+  `process_inbound_message` to the Celery worker (which owns the orchestrator,
+  interpreter and scheduler via `app.runtime`), answering TwiML in well under
+  200 ms; an enqueue failure returns 500 so Twilio retries. Closed by the
+  `webhook-offload` change; see `odd/tasks/webhook-offload.md`.
