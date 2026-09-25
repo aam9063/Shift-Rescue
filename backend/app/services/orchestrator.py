@@ -32,6 +32,7 @@ from app.db.models import (
     Offer,
     RescueCase,
 )
+from app.db.models import Interpretation as InterpretationRow
 from app.domain.eligibility import evaluate_eligibility
 from app.domain.entities import EligibilityResult, RescueSettings
 from app.domain.entities import Employee as EmployeeEntity
@@ -89,10 +90,10 @@ class RescueOrchestrator:
         text: str,
     ) -> None:
         now = self._clock.now()
-        persisted = await self._persist_inbound(
+        message_id = await self._persist_inbound(
             conversation_id, employee_id, provider_message_id, text
         )
-        if not persisted:
+        if message_id is None:
             return  # duplicate provider message: processed once (spec §7.4)
 
         # Spec §9.3: a paused agent does nothing — the manager takes over.
@@ -105,12 +106,14 @@ class RescueOrchestrator:
                 llm_context = {
                     "rescue_id": None,
                     "pending_offers": await self._pending_offer_ids(employee_id),
+                    "accepted_offers": await self._accepted_offer_ids(employee_id),
                 }
                 interpreted = await self.interpreter.interpret(text, llm_context)
             except (CircuitOpenError, ProviderUnavailableError):
                 interpreted = None  # degraded mode: deterministic parser (§9.3)
 
             if interpreted is not None:
+                await self._persist_interpretation(message_id, interpreted)
                 await self._route_interpreted(conversation_id, employee_id, interpreted)
                 return
 
@@ -304,6 +307,30 @@ class RescueOrchestrator:
             ).scalars()
             return [o.id for o in offers]
 
+    async def _accepted_offer_ids(self, employee_id: str) -> list[str]:
+        """Ids of the employee's accepted offers whose rescue case is still live.
+
+        An accepted offer always implies a non-OPEN case (acceptance moves it to
+        COVERED/PARTIALLY_COVERED), so "still open" here means not yet finally
+        resolved: the rescue can still reopen when the covering employee
+        withdraws (spec §5.5). Statuses verified in `app/db/models.py`.
+        """
+        async with self._sessions() as session:
+            offers = (
+                await session.execute(
+                    select(Offer)
+                    .join(RescueCase, RescueCase.id == Offer.rescue_id)
+                    .where(
+                        Offer.employee_id == employee_id,
+                        Offer.status == "ACCEPTED",
+                        RescueCase.status.notin_(
+                            [State.CLOSED_BY_MANAGER.value, State.CANCELLED.value]
+                        ),
+                    )
+                )
+            ).scalars()
+            return [o.id for o in offers]
+
     async def _agent_is_paused(self, employee_id: str) -> bool:
         location_id = await self._location_of(employee_id)
         if location_id is None:
@@ -354,7 +381,8 @@ class RescueOrchestrator:
         employee_id: str,
         provider_message_id: str,
         text: str,
-    ) -> bool:
+    ) -> str | None:
+        """Persist one inbound message; returns its id, or None on a duplicate."""
         async with self._sessions() as session:
             existing = (
                 await session.execute(
@@ -362,12 +390,13 @@ class RescueOrchestrator:
                 )
             ).scalar_one_or_none()
             if existing is not None:
-                return False
+                return None
 
+            message_id = f"msg_{uuid4().hex}"
             await self._get_or_create_conversation(session, conversation_id, employee_id)
             session.add(
                 Message(
-                    id=f"msg_{uuid4().hex}",
+                    id=message_id,
                     conversation_id=conversation_id,
                     direction="inbound",
                     provider_message_id=provider_message_id,
@@ -378,8 +407,48 @@ class RescueOrchestrator:
             try:
                 await session.commit()
             except IntegrityError:
-                return False
-            return True
+                return None
+            return message_id
+
+    async def _persist_interpretation(self, message_id: str, interpreted: Any) -> None:
+        """Best effort: one row per LLM interpretation (spec §7.6).
+
+        `extracted` carries the structured fields only — message bodies and
+        health details are never stored (spec §10). A failure to persist is
+        logged and never breaks the rescue flow.
+        """
+        try:
+            usage = self.interpreter.last_usage if self.interpreter is not None else None
+            extracted = {
+                "shift_reference": interpreted.shift_reference,
+                "offer_reference": interpreted.offer_reference,
+                "proposed_start": interpreted.proposed_start,
+                "proposed_end": interpreted.proposed_end,
+                "contains_health_details": interpreted.contains_health_details,
+                "question_text": interpreted.question_text,
+            }
+            async with self._sessions() as session:
+                session.add(
+                    InterpretationRow(
+                        message_id=message_id,
+                        intent=interpreted.intent,
+                        confidence=interpreted.confidence,
+                        extracted=extracted,
+                        model=str((usage or {}).get("model") or "unknown"),
+                        prompt_version=interpreted.prompt_version,
+                        latency_ms=int((usage or {}).get("latency_ms") or 0),
+                        input_tokens=int((usage or {}).get("input_tokens") or 0),
+                        output_tokens=int((usage or {}).get("output_tokens") or 0),
+                        cost_usd=float((usage or {}).get("cost_usd") or 0.0),
+                    )
+                )
+                await session.commit()
+        except Exception as error:
+            structlog.get_logger(__name__).warning(
+                "interpretation_persist_failed",
+                message_id=message_id,
+                error=str(error)[:200],
+            )
 
     async def _get_or_create_conversation(
         self, session: AsyncSession, conversation_id: str, employee_id: str

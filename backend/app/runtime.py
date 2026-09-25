@@ -76,7 +76,11 @@ class RescueRuntime:
 
 def build_runtime(settings: Settings) -> RescueRuntime:
     """Construct the full rescue runtime exactly as the API service did."""
-    _, session_factory = create_engine_and_session()  # engine lives in the pool
+    # Pass the database URL explicitly: falling back to the ambient settings
+    # would make the runtime silently ignore the settings it was given (and
+    # connect to a developer's local database from tests).
+    # The engine lives in the pool held by the session factory.
+    _, session_factory = create_engine_and_session(settings.database_url)
     channel = TwilioWhatsAppChannel(
         account_sid=settings.twilio_account_sid,
         auth_token=settings.twilio_auth_token,

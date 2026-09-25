@@ -3,6 +3,7 @@
 All tests are hermetic: SQLite, no provider SDK calls, no network.
 """
 
+import asyncio
 import os
 import tempfile
 from datetime import UTC, datetime, timedelta
@@ -74,9 +75,15 @@ def test_build_runtime_wires_a_configured_interpreter(monkeypatch) -> None:
 
 
 def test_build_runtime_registers_task_handlers_in_the_scheduler() -> None:
-    """An unregistered handler would raise KeyError; a registered one runs."""
+    """An unregistered handler would raise KeyError; a registered one runs.
+
+    A temp-file database keeps this hermetic: the test used to reach for the
+    ambient DATABASE_URL, which passed on a developer machine with Postgres up
+    and failed in CI.
+    """
+    url = _temp_database_url()
     with capture_logs():
-        runtime = build_runtime(make_settings(llm_provider="none"))
+        runtime = build_runtime(make_settings(llm_provider="none", database_url=url))
 
     for name, handler in runtime.orchestrator.task_handlers().items():
         assert runtime.scheduler._handlers[name] == handler
@@ -89,9 +96,23 @@ def test_build_runtime_registers_task_handlers_in_the_scheduler() -> None:
     assert runtime.scheduler.pending_count() == 0
 
 
-def _run(scheduler: SimScheduler) -> int:
-    import asyncio
+def _temp_database_url() -> str:
+    """Temp-file SQLite database with the schema created (hermetic)."""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    url = f"sqlite+aiosqlite:///{path}"
 
+    async def create_schema() -> None:
+        engine = create_async_engine(url)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await engine.dispose()
+
+    asyncio.run(create_schema())
+    return url
+
+
+def _run(scheduler: SimScheduler) -> int:
     return asyncio.run(scheduler.run_due(SystemClock().now()))
 
 

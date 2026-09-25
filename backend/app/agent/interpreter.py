@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from app.agent.schemas import Interpretation
 from app.ports import LLMClient
 
-PROMPT_VERSION = "interpreter_v2"
+PROMPT_VERSION = "interpreter_v4"
 
 FALLBACK = Interpretation(intent="UNCLEAR", confidence=0.0)
 
@@ -55,3 +55,9 @@ class MessageInterpreter:
                 raise ProviderUnavailableError(str(error)) from error
 
         return FALLBACK
+
+    @property
+    def last_usage(self) -> dict[str, Any] | None:
+        """Usage dict of the wrapped client's last call, or None if unreported."""
+        usage = getattr(self._llm, "last_usage", None)
+        return usage if isinstance(usage, dict) else None
