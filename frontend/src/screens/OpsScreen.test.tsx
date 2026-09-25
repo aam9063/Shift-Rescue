@@ -19,13 +19,13 @@ describe('OpsScreen (degraded mode banner, spec §9.3)', () => {
     vi.spyOn(systemStatusSource, 'get').mockResolvedValue({
       degraded: true,
       reasons: ['llm_circuit_open'],
-      details: ['El proveedor del LLM está fallando: modo degradado con parser determinista.'],
+      details: ['The LLM provider is failing: degraded mode with the deterministic parser.'],
     })
 
     renderWithProviders(<OpsScreen />)
 
     const banner = await screen.findByRole('alert')
     expect(banner).toHaveTextContent('Degraded mode')
-    expect(banner).toHaveTextContent('El proveedor del LLM está fallando')
+    expect(banner).toHaveTextContent('The LLM provider is failing')
   })
 })

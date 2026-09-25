@@ -14,10 +14,13 @@ LLM_NOT_CONFIGURED = "llm_not_configured"
 LLM_CIRCUIT_OPEN = "llm_circuit_open"
 AGENT_PAUSED = "agent_paused"
 
+# Surfaced in the dashboard banner — UI copy is English (spec §0 rule 1).
 DESCRIPTIONS: dict[str, str] = {
-    LLM_NOT_CONFIGURED: "El intérprete LLM no está configurado: se usa el parser determinista.",
-    LLM_CIRCUIT_OPEN: "El proveedor del LLM está fallando: modo degradado con parser determinista.",
-    AGENT_PAUSED: "El agente está en pausa en este local: los mensajes van al manager.",
+    LLM_NOT_CONFIGURED: (
+        "The LLM interpreter is not configured: the deterministic parser is in use."
+    ),
+    LLM_CIRCUIT_OPEN: "The LLM provider is failing: degraded mode with the deterministic parser.",
+    AGENT_PAUSED: "The agent is paused for this location: incoming messages go to the manager.",
 }
 
 

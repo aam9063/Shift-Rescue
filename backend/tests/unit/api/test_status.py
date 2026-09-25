@@ -43,7 +43,7 @@ def test_build_status_includes_details() -> None:
     status = build_status([AGENT_PAUSED])
     assert status["degraded"] is True
     assert status["reasons"] == [AGENT_PAUSED]
-    assert status["details"] and "pausa" in status["details"][0]
+    assert status["details"] and "paused" in status["details"][0]
 
 
 def test_endpoint_reports_degraded_reasons(monkeypatch) -> None:
