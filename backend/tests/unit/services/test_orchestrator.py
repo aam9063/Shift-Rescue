@@ -34,6 +34,15 @@ async def test_absence_report_sends_confirmation_and_no_case_yet(world, db, now)
     confirms = [m for m in world.channel.sent if m["template_key"] == "absence_confirm"]
     assert len(confirms) == 1
     assert confirms[0]["to"] == "+34600000001"
+
+    # The confirmation is persisted so the dashboard can show the conversation.
+    async with db() as session:
+        persisted = (
+            await session.execute(
+                select(Message).where(Message.template_key == "absence_confirm")
+            )
+        ).scalars().all()
+    assert len(persisted) == 1
     # No manager notification and no offers before explicit confirmation.
     assert not [m for m in world.channel.sent if m["to"] == "+34600999001"]
     assert not [m for m in world.channel.sent if m["template_key"] == "offer"]
@@ -99,8 +108,14 @@ async def test_duplicate_provider_message_is_processed_once(world, db) -> None:
 
 
     async with db() as session:
-        count = (await session.execute(select(func.count()).select_from(Message))).scalar_one()
-    assert count == 1
+        inbound = (
+            await session.execute(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.direction == "inbound")
+            )
+        ).scalar_one()
+    assert inbound == 1  # the duplicate provider message was ignored
     assert len([m for m in world.channel.sent if m["template_key"] == "absence_confirm"]) == 1
 
 

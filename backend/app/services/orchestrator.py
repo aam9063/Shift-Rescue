@@ -401,6 +401,7 @@ class RescueOrchestrator:
         await self._send_template(
             to=self._phone_of(employee),
             template_key="absence_confirm",
+            conversation_id=conversation_id,
             employee_name=employee["full_name"],
             role=self._role_label(target.role),
             start=self._fmt(target.starts_at),
