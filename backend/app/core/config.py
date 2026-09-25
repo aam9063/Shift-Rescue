@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     twilio_whatsapp_from: str = "whatsapp:+14155238886"  # sandbox default
     twilio_validate_signature: bool = True
 
+    # Privacy (spec §10): message bodies older than this are purged.
+    message_retention_days: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:

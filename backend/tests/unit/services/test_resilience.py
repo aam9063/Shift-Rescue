@@ -1,6 +1,7 @@
 """Resilience tests: agent pause, outbound limits, retention purge (spec §9.3,
 §9.4, §10)."""
 
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
@@ -117,3 +118,57 @@ async def test_outbound_limit_does_not_affect_other_employees(world) -> None:
         text="sí",
     )
     assert len(world.channel.with_template("offer")) == 3
+
+
+async def test_retention_purge_removes_old_messages_only(world, db) -> None:
+    """Spec §10: message bodies are purged after the retention window; the
+    audit trail and cases survive."""
+    from app.observability.retention import purge_old_messages
+
+    now = datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
+    async with db() as session:
+        session.add_all(
+            [
+                Message(
+                    id="msg_old",
+                    conversation_id="conv_1",
+                    direction="inbound",
+                    provider_message_id="old-1",
+                    body_redacted="mensaje viejo",
+                    delivery_status="received",
+                    created_at=now - timedelta(days=31),
+                ),
+                Message(
+                    id="msg_recent",
+                    conversation_id="conv_1",
+                    direction="inbound",
+                    provider_message_id="recent-1",
+                    body_redacted="mensaje de hoy",
+                    delivery_status="received",
+                    created_at=now - timedelta(days=2),
+                ),
+            ]
+        )
+        session.add(
+            AuditEvent(id="audit_keep", rescue_id=None, type="X", payload={}, actor="system")
+        )
+        await session.commit()
+
+    async with db() as session:
+        purged = await purge_old_messages(session, retention_days=30, now=now)
+        assert purged == 1
+
+        remaining = sorted(
+            m.id for m in (await session.execute(select(Message))).scalars()
+        )
+        assert remaining == ["msg_recent"]
+        audits = (await session.execute(select(AuditEvent))).scalars().all()
+        assert [a.id for a in audits] == ["audit_keep"]
+
+
+async def test_retention_purge_is_idempotent(world, db) -> None:
+    from app.observability.retention import purge_old_messages
+
+    now = datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
+    async with db() as session:
+        assert await purge_old_messages(session, retention_days=30, now=now) == 0
