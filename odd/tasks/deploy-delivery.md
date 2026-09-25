@@ -66,4 +66,54 @@ ADR-003), multi-environment pipelines, blue/green deploys.
 
 ## Progress / Next step
 
-Next: T1 (repo artifacts).
+**Repo artifacts complete (T1, T2, docs).** T3/T4 (AWS instance + first deploy)
+are **deferred by user decision** to avoid the monthly cost until the demo is
+reviewed; the free infrastructure is already created.
+
+### Already created in AWS (no cost)
+
+| Resource | Value |
+|---|---|
+| ECR | `shift-rescue-api`, `shift-rescue-web` (`786016560269.dkr.ecr.eu-west-1.amazonaws.com/...`) |
+| GitHub OIDC provider | `token.actions.githubusercontent.com` |
+| Deploy role (CI) | `arn:aws:iam::786016560269:role/shift-rescue-github-deploy` (trusts `repo:aam9063/Shift-Rescue:ref:refs/heads/main`, ECR push) |
+| Instance role/profile | `shift-rescue-instance` (ECR pull + `ssm:GetParameter*` on `/shift-rescue/prod/*`) |
+| Security group | `sg-0355bef505718a4d2` (80/443 public, 22 from `79.117.226.228`) |
+| SSH key pair | local `~/.ssh/shift-rescue-deploy`, imported as `shift-rescue-deploy` |
+| Region | `eu-west-1` |
+
+### Resume plan (≈10 minutes when the user approves the cost)
+
+1. Launch the instance and attach the Elastic IP:
+
+   ```bash
+   SG=sg-0355bef505718a4d2; REGION=eu-west-1
+   AMI=$(aws ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id --region $REGION --query 'Parameter.Value' --output text)
+   IID=$(aws ec2 run-instances --image-id $AMI --instance-type t3.large      --key-name shift-rescue-deploy --security-group-ids $SG      --iam-instance-profile Name=shift-rescue-instance      --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=30,VolumeType=gp3}'      --user-data file://infra/deploy/bootstrap-ec2.sh      --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=shift-rescue-demo}]'      --region $REGION --query 'Instances[0].InstanceId' --output text)
+   aws ec2 wait instance-running --instance-ids $IID --region $REGION
+   EIP=$(aws ec2 allocate-address --domain vpc --region $REGION --query 'AllocationId' --output text)
+   aws ec2 associate-address --instance-id $IID --allocation-id $EIP --region $REGION
+   aws ec2 describe-addresses --allocation-ids $EIP --region $REGION --query 'Addresses[0].PublicIp' --output text
+   ```
+
+2. Store the secrets (DOMAIN = the Elastic IP with dashes + `.sslip.io`):
+
+   ```bash
+   P=/shift-rescue/prod; REGION=eu-west-1
+   aws ssm put-parameter --name $P/DOMAIN          --value '1-2-3-4.sslip.io' --type String         --overwrite --region $REGION
+   aws ssm put-parameter --name $P/POSTGRES_PASSWORD --value "$(openssl rand -hex 24)" --type SecureString --overwrite --region $REGION
+   aws ssm put-parameter --name $P/JWT_SECRET      --value "$(openssl rand -hex 32)" --type SecureString --overwrite --region $REGION
+   aws ssm put-parameter --name $P/TWILIO_ACCOUNT_SID  --value 'AC…' --type SecureString --overwrite --region $REGION
+   aws ssm put-parameter --name $P/TWILIO_AUTH_TOKEN   --value '…'   --type SecureString --overwrite --region $REGION
+   aws ssm put-parameter --name $P/TWILIO_WHATSAPP_FROM --value 'whatsapp:+14155238886' --type String --overwrite --region $REGION
+   ```
+
+3. Repository secrets for the workflow: `AWS_DEPLOY_ROLE_ARN`
+   (`arn:aws:iam::786016560269:role/shift-rescue-github-deploy`), `EC2_HOST`
+   (the Elastic IP), `EC2_USER` (`ubuntu`), `EC2_SSH_KEY`
+   (`~/.ssh/shift-rescue-deploy`, the private key).
+4. Merge this branch to `main` and run **Actions → Deploy demo**.
+5. Point the Twilio sandbox webhook at
+   `https://<domain>/webhooks/twilio/inbound` (no tunnel needed any more).
+6. When the review is over: `aws ec2 stop-instances --instance-ids $IID`
+   (only the EBS volume keeps costing) or terminate + release the EIP.
