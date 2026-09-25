@@ -392,3 +392,95 @@ async def test_persistence_failure_is_logged_and_flow_continues() -> None:
         assert case.status == "COVERED"
         rows = (await session.execute(select(InterpretationRow))).scalars().all()
     assert rows == []
+
+
+class ContextAwareLLM(ScriptedLLM):
+    """Mimics the v4 prompt's decision procedure for affirmatives.
+
+    Without a pending confirmation or a pending offer, a bare "sí" is UNCLEAR;
+    with a pending confirmation it is ABSENCE_CONFIRM. This is the behaviour that
+    made a production "sí" answer "no te he entendido" while the golden set
+    passed, because the fixture fed a context key the orchestrator never sent.
+    """
+
+    async def interpret(self, message_body: str, context: dict) -> dict:
+        self.calls += 1
+        self.contexts.append(dict(context))
+        lowered = message_body.lower()
+        if "no puedo ir" in lowered:
+            return {"intent": "ABSENCE_REPORT", "confidence": 0.98}
+        if context.get("pending_confirmation"):
+            return {"intent": "ABSENCE_CONFIRM", "confidence": 0.95}
+        if context.get("pending_offers"):
+            return {"intent": "OFFER_ACCEPT", "confidence": 0.95}
+        return {"intent": "UNCLEAR", "confidence": 0.3}
+
+
+async def test_llm_context_carries_the_state_the_prompt_needs() -> None:
+    """Contract for the interpreter context: the keys the prompt branches on.
+
+    Both production defects found live (a withdrawal that could not be told from
+    a decline, and a confirmation the model called UNCLEAR) were a state the
+    orchestrator never sent while the eval fixture did. This test pins the
+    contract so a missing key fails here instead of in the demo.
+    """
+    world, _ = await build_world(floor_count=4)
+    llm = ContextAwareLLM([{"intent": "UNCLEAR", "confidence": 0.3}])
+    world.orchestrator.interpreter = MessageInterpreter(llm=llm)
+
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_tests",
+        employee_id="emp_01_floor",
+        provider_message_id="ctx_msg_1",
+        text="hola",
+    )
+    first = llm.contexts[-1]
+    assert "pending_offers" in first
+    assert "accepted_offers" in first
+    assert "pending_confirmation" not in first  # nothing reported yet
+
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_tests",
+        employee_id="emp_01_floor",
+        provider_message_id="ctx_msg_2",
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_tests",
+        employee_id="emp_01_floor",
+        provider_message_id="ctx_msg_3",
+        text="cualquier cosa",
+    )
+    second = llm.contexts[-1]
+    assert second["pending_confirmation"] == "shift_1"
+
+
+async def test_llm_confirmation_advances_the_case() -> None:
+    """A bare "sí" must confirm the absence once the state is in the context."""
+    world, _ = await build_world(floor_count=4)
+    world.orchestrator.interpreter = MessageInterpreter(llm=ContextAwareLLM([]))
+
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_tests",
+        employee_id="emp_01_floor",
+        provider_message_id="conf_msg_1",
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    assert world.channel.with_template("absence_confirm"), "the absence must be reported first"
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_tests",
+        employee_id="emp_01_floor",
+        provider_message_id="conf_msg_2",
+        text="sí",
+    )
+
+    from sqlalchemy import select
+
+    from app.db.models import Offer, RescueCase
+
+    async with world.session_factory() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+        offers = (await session.execute(select(Offer))).scalars().all()
+
+    assert case.status == "OFFERING"
+    assert len(offers) == 3

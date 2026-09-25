@@ -103,11 +103,19 @@ class RescueOrchestrator:
 
         if self.interpreter is not None:
             try:
-                llm_context = {
+                llm_context: dict[str, Any] = {
                     "rescue_id": None,
                     "pending_offers": await self._pending_offer_ids(employee_id),
                     "accepted_offers": await self._accepted_offer_ids(employee_id),
                 }
+                # The interpreter needs to know that a confirmation is pending,
+                # otherwise a bare "sí" reads as an answer with nothing to
+                # answer (the prompt sends it to UNCLEAR) and the absence is
+                # never confirmed. Same class of defect as the withdrawal
+                # marker: state the model needs must be sent, not guessed.
+                awaiting = await self._case_awaiting_confirmation(employee_id)
+                if awaiting is not None:
+                    llm_context["pending_confirmation"] = awaiting
                 interpreted = await self.interpreter.interpret(text, llm_context)
             except (CircuitOpenError, ProviderUnavailableError):
                 interpreted = None  # degraded mode: deterministic parser (§9.3)
@@ -510,7 +518,10 @@ class RescueOrchestrator:
             session.add(
                 AuditEvent(
                     id=f"audit_{uuid4().hex}",
-                    rescue_id=f"case_{target.id}_{int(now.timestamp())}",
+                    # The real case id: a synthetic "case_<shift>_<ts>" id used to
+                    # be written here, which left every timeline query empty and
+                    # split the audit trail across two id namespaces.
+                    rescue_id=case_id,
                     type="ABSENCE_REPORTED",
                     payload={"shift_id": target.id},
                     actor=f"employee:{employee_id}",
@@ -806,6 +817,24 @@ class RescueOrchestrator:
         return sent
 
     # --- offer acceptance and decisions ---------------------------------------
+
+    async def _case_awaiting_confirmation(self, employee_id: str) -> str | None:
+        """Shift id of the employee's OPEN case, or None.
+
+        An OPEN case means the absence was reported and we are waiting for the
+        employee to confirm it (spec §5.4), which is exactly the state the
+        interpreter needs as `pending_confirmation`.
+        """
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.status == State.OPEN.value,
+                    )
+                )
+            ).scalars().first()
+            return case.shift_id if case is not None else None
 
     async def _has_open_case(self, employee_id: str) -> bool:
         async with self._sessions() as session:

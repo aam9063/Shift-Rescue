@@ -48,6 +48,28 @@ async def test_absence_report_sends_confirmation_and_no_case_yet(world, db, now)
     assert not [m for m in world.channel.sent if m["template_key"] == "offer"]
 
 
+async def test_absence_audit_event_uses_the_real_case_id(world, db) -> None:
+    """The dashboard timeline joins audit events on the case id.
+
+    A synthetic `case_<shift>_<timestamp>` id used to be written here, which left
+    every timeline query empty and split the audit trail across two namespaces.
+    """
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+        events = (await session.execute(select(AuditEvent))).scalars().all()
+
+    reported = [e for e in events if e.type == "ABSENCE_REPORTED"]
+    assert reported, "the absence report must be audited"
+    assert all(e.rescue_id == case.id for e in reported)
+
+
 async def test_confirmation_opens_case_offering_with_first_wave(world, db, now) -> None:
     await world.orchestrator.handle_inbound(
         conversation_id=CONVERSATION,
