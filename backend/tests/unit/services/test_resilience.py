@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-from app.db.models import AuditEvent, LocationSettings, Message, RescueCase
+from app.db.models import AuditEvent, LocationSettings, Message, Offer, RescueCase
 from app.db.seed import DEMO_LOCATION_ID
 from tests.unit.services.helpers import MANAGER_PHONE
 
@@ -172,3 +172,146 @@ async def test_retention_purge_is_idempotent(world, db) -> None:
     now = datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
     async with db() as session:
         assert await purge_old_messages(session, retention_days=30, now=now) == 0
+
+
+# --- double delivery (broker redelivery / reconcile overlap, spec §7.3) -------
+
+
+async def test_wave_timeout_delivered_twice_creates_no_duplicate_offers() -> None:
+    """The broker may redeliver a timer (acks_late) or the reconcile sweep may
+    race the original: the handler's guards must absorb the second delivery."""
+    from tests.unit.services.helpers import build_world, run_to_offering
+
+    world, _ = await build_world(floor_count=5, shift_starts_in=timedelta(hours=3))
+    offers = await run_to_offering(world)
+    assert len(offers) == 3
+    async with world.session_factory() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+
+    world.clock.advance(timedelta(minutes=11))
+    now = world.clock.now()
+    # The SAME timer, delivered twice in one pass.
+    world.scheduler.schedule(now, "wave_timeout", {"case_id": case.id})
+    world.scheduler.schedule(now, "wave_timeout", {"case_id": case.id})
+    await world.scheduler.run_due(now)
+
+    async with world.session_factory() as session:
+        all_offers = (await session.execute(select(Offer))).scalars().all()
+        wave2 = [o for o in all_offers if o.wave_number == 2]
+        assert len(wave2) == 1, "duplicate delivery created a duplicate wave"
+        assert len(all_offers) == 4  # wave 1 (3) + wave 2 (1), nothing more
+
+
+async def test_deadline_delivered_twice_escalates_once_and_leaves_terminal_untouched() -> None:
+    from tests.unit.services.helpers import build_world, run_to_offering
+
+    world, _ = await build_world(floor_count=5)
+    await run_to_offering(world)
+    async with world.session_factory() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+
+    world.clock.advance(timedelta(minutes=12))  # past the rescue deadline
+    now = world.clock.now()
+    world.scheduler.schedule(now, "rescue_deadline", {"case_id": case.id})
+    world.scheduler.schedule(now, "rescue_deadline", {"case_id": case.id})
+    await world.scheduler.run_due(now)
+
+    async with world.session_factory() as session:
+        escalated_case = (
+            await session.execute(select(RescueCase).where(RescueCase.id == case.id))
+        ).scalar_one()
+        assert escalated_case.status == "ESCALATED"
+        escalations = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.rescue_id == case.id, AuditEvent.type == "ESCALATED"
+                )
+            )
+        ).scalars().all()
+        assert len(escalations) == 1, "duplicate delivery escalated twice"
+    assert len(world.channel.with_template("manager_escalated")) == 1
+
+    # A third delivery once the case is terminal changes nothing at all.
+    world.scheduler.schedule(world.clock.now(), "rescue_deadline", {"case_id": case.id})
+    await world.scheduler.run_due(world.clock.now())
+    async with world.session_factory() as session:
+        escalated_case = (
+            await session.execute(select(RescueCase).where(RescueCase.id == case.id))
+        ).scalar_one()
+        assert escalated_case.status == "ESCALATED"
+        escalations = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.rescue_id == case.id, AuditEvent.type == "ESCALATED"
+                )
+            )
+        ).scalars().all()
+        assert len(escalations) == 1
+    assert len(world.channel.with_template("manager_escalated")) == 1
+
+
+# --- reconcile sweep (spec §9.1: no rescue left stuck) ------------------------
+
+
+async def test_reconcile_stale_cases_enqueues_only_overdue_non_terminal_cases() -> None:
+    """Overdue OPEN/OFFERING cases get their deadline job re-enqueued; terminal
+    cases are left alone, and running the sweep twice is a no-op."""
+    from app.workers.tasks import _reconcile_stale_cases
+    from tests.unit.services.helpers import build_world, run_to_offering
+
+    world, _ = await build_world(floor_count=4)
+    await run_to_offering(world)
+    world.clock.advance(timedelta(minutes=12))  # timer "lost": nothing fires it
+    now = world.clock.now()
+
+    async with world.session_factory() as session:
+        offering_case = (await session.execute(select(RescueCase))).scalar_one()
+        offering_id = offering_case.id
+        session.add_all(
+            [
+                RescueCase(
+                    id="case_open_overdue",
+                    location_id=offering_case.location_id,
+                    shift_id=offering_case.shift_id,
+                    absent_employee_id="emp_01_floor",
+                    origin="employee_message",
+                    status="OPEN",
+                    opened_at=now - timedelta(minutes=20),
+                    deadline_at=now - timedelta(minutes=5),
+                ),
+                RescueCase(
+                    id="case_covered_overdue",
+                    location_id=offering_case.location_id,
+                    shift_id=offering_case.shift_id,
+                    absent_employee_id="emp_01_floor",
+                    origin="employee_message",
+                    status="COVERED",
+                    opened_at=now - timedelta(minutes=30),
+                    deadline_at=now - timedelta(minutes=10),
+                    closed_at=now,
+                    resolution="covered",
+                ),
+            ]
+        )
+        await session.commit()
+
+    recovered = await _reconcile_stale_cases(world.session_factory, world.scheduler, now)
+
+    assert recovered == 2  # the OPEN case + the OFFERING case; never the COVERED one
+
+    # The re-enqueued timers fire, and the handlers re-check the live state.
+    await world.scheduler.run_due(now)
+    async with world.session_factory() as session:
+        rescued = (
+            await session.execute(select(RescueCase).where(RescueCase.id == offering_id))
+        ).scalar_one()
+        assert rescued.status == "ESCALATED"
+        open_case = (
+            await session.execute(select(RescueCase).where(RescueCase.id == "case_open_overdue"))
+        ).scalar_one()
+        assert open_case.status == "OPEN"  # the deadline handler only acts on OFFERING
+
+    # Safe to run repeatedly: the sweep re-enqueues only the still-overdue
+    # OPEN case (its deadline handler no-ops on it); the ESCALATED one is
+    # terminal and never comes back.
+    assert await _reconcile_stale_cases(world.session_factory, world.scheduler, now) == 1

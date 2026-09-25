@@ -717,10 +717,9 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=(
-                        f"audit_{case.id}_queued_w{wave_number}_"
-                        f"{int(now.timestamp())}"
-                    ),
+                    # Same reasoning as the escalated id: the composed form
+                    # reached exactly the 64-char limit, leaving no margin.
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="OFFERS_QUEUED",
                     payload={
@@ -1662,10 +1661,10 @@ class RescueOrchestrator:
         case.status = result.new_state.value
         session.add(
             AuditEvent(
-                id=(
-                    f"audit_{case.id}_escalated_"
-                    f"{int(self._clock.now().timestamp())}_{event.name}"
-                ),
+                # Composed ids ("audit_<case>_escalated_<ts>_<event>") overflowed
+                # VARCHAR(64) and rolled back the escalation; the reason lives in
+                # `payload` and the case in `rescue_id`, so the id is opaque.
+                id=f"audit_{uuid4().hex}",
                 rescue_id=case.id,
                 type="ESCALATED",
                 payload={"reason": event.name},

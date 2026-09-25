@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     demo_real_phones: str | None = None  # "Name:+346...|Name:+346..." (max 3, sandbox)
 
+    # Timer backend (spec §7.3): "celery" publishes each timer as one deferred
+    # broker task (survives worker restarts, any prefork child can run it);
+    # "memory" keeps the in-process SimScheduler for a single-process local run
+    # and the eval harness.
+    scheduler_backend: str = "celery"
+
     # Twilio WhatsApp (docs/twilio-sandbox-setup.md)
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

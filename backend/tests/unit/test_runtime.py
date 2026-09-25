@@ -18,6 +18,7 @@ from app.core.clock import SystemClock
 from app.core.config import Settings, get_settings
 from app.db.models import Base, Employee
 from app.runtime import RescueRuntime, build_runtime, reset_worker_runtime
+from app.workers.celery_scheduler import CeleryScheduler
 from app.workers.scheduler import SimScheduler
 
 
@@ -77,16 +78,19 @@ def test_build_runtime_wires_a_configured_interpreter(monkeypatch) -> None:
 def test_build_runtime_registers_task_handlers_in_the_scheduler() -> None:
     """An unregistered handler would raise KeyError; a registered one runs.
 
-    A temp-file database keeps this hermetic: the test used to reach for the
-    ambient DATABASE_URL, which passed on a developer machine with Postgres up
-    and failed in CI.
+    The scheduler is injected (the same right every test and the eval harness
+    has): a temp-file database keeps this hermetic — the test used to reach
+    for the ambient DATABASE_URL, which passed on a developer machine with
+    Postgres up and failed in CI.
     """
     url = _temp_database_url()
     with capture_logs():
-        runtime = build_runtime(make_settings(llm_provider="none", database_url=url))
+        runtime = build_runtime(
+            make_settings(llm_provider="none", database_url=url), scheduler=SimScheduler()
+        )
 
     for name, handler in runtime.orchestrator.task_handlers().items():
-        assert runtime.scheduler._handlers[name] == handler
+        assert runtime.scheduler.handler_for(name) == handler
 
     runtime.scheduler.schedule(
         datetime.now(UTC) - timedelta(seconds=1), "wave_timeout", {"case_id": "missing"}
@@ -137,6 +141,37 @@ def test_build_runtime_logs_the_llm_path() -> None:
     paths = [entry for entry in logs if entry["event"] == "llm_path"]
     assert len(paths) == 1
     assert paths[0]["active"] is False
+
+
+# --- scheduler backend selection (spec §7.3) ----------------------------------
+
+
+def test_build_runtime_defaults_to_the_broker_scheduler() -> None:
+    """Production timers are owned by the broker, not by worker memory."""
+    with capture_logs():
+        runtime = build_runtime(make_settings(llm_provider="none"))
+
+    assert isinstance(runtime.scheduler, CeleryScheduler)
+
+
+def test_build_runtime_picks_the_memory_backend_when_configured() -> None:
+    with capture_logs():
+        runtime = build_runtime(make_settings(llm_provider="none", scheduler_backend="memory"))
+
+    assert isinstance(runtime.scheduler, SimScheduler)
+
+
+def test_build_runtime_honours_an_injected_scheduler() -> None:
+    injected = SimScheduler()
+    with capture_logs():
+        runtime = build_runtime(make_settings(llm_provider="none"), scheduler=injected)
+
+    assert runtime.scheduler is injected
+
+
+def test_build_runtime_rejects_an_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="scheduler_backend"), capture_logs():
+        build_runtime(make_settings(llm_provider="none", scheduler_backend="redis"))
 
 
 def test_runtime_circuit_open_is_false_without_interpreter() -> None:

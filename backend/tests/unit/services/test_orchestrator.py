@@ -242,6 +242,19 @@ async def test_every_persisted_id_fits_the_database_column_width(world, db) -> N
         text="sí",
     )
 
+    # Drive the case to escalation too: the escalated audit id used to be
+    # composed ("audit_<case>_escalated_<ts>_<event>") and reached 81 characters,
+    # so the escalation transaction failed while this test stayed green because
+    # it only ever exercised the confirmation path.
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_3",
+        text="no puedo, lo siento",
+    )
+    world.clock.advance(timedelta(days=1))
+    await world.scheduler.run_due(world.clock.now())
+
     from sqlalchemy import select
 
     from app.db.models import AuditEvent, Message, Offer, RescueCase
@@ -254,5 +267,18 @@ async def test_every_persisted_id_fits_the_database_column_width(world, db) -> N
         ids += [row.id for row in (await session.execute(select(AuditEvent))).scalars()]
 
     assert ids, "expected persisted rows"
+    assert any(
+        row.type == "ESCALATED"
+        for row in (await _audit_events(db))
+    ), "the guard must cover the escalation path"
     too_long = [i for i in ids if len(i) > 64]
     assert too_long == [], f"ids exceeding VARCHAR(64): {too_long}"
+
+
+async def _audit_events(db) -> list:
+    from sqlalchemy import select
+
+    from app.db.models import AuditEvent
+
+    async with db() as session:
+        return list((await session.execute(select(AuditEvent))).scalars())

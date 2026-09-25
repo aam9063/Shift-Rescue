@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -23,8 +23,10 @@ describe('TodayScreen (kanban per user mockup)', () => {
     expect(screen.getByText('Searching')).toBeInTheDocument()
     expect(screen.getByText('Needs your approval')).toBeInTheDocument()
     expect(screen.getByText('Covered today')).toBeInTheDocument()
-    // Column count badges
-    expect(screen.getAllByText('2').length).toBeGreaterThanOrEqual(2)
+    // Corrected board: the covered column counts the 2 covered plus the 4
+    // scheduled mock shifts (6); the approvals badge keeps its own count.
+    const coveredColumn = screen.getByRole('region', { name: 'Covered today' })
+    expect(within(coveredColumn).getByText('6')).toBeInTheDocument()
   })
 
   it('shows uncovered shifts with their role and time', async () => {

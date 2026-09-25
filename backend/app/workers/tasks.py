@@ -1,18 +1,24 @@
 """Celery tasks: inbound orchestration, scheduled ticks, retention purge."""
 
 import json
-from typing import TYPE_CHECKING, Any
+from collections.abc import Coroutine
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from redis import Redis
 from redis.exceptions import RedisError
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.workers.async_runner import run_async
 from app.workers.celery_app import celery_app
 
 if TYPE_CHECKING:
     from app.runtime import RescueRuntime
+    from app.workers.celery_scheduler import CeleryScheduler
+    from app.workers.scheduler import SimScheduler
 
 logger = structlog.get_logger(__name__)
 
@@ -79,6 +85,95 @@ def close_rescue_task(rescue_id: str, decided_by: str) -> bool:
     run_async(get_worker_runtime().orchestrator.close_rescue(rescue_id, decided_by))
     logger.info("worker_rescue_closed", rescue_id=rescue_id)
     return True
+
+
+@celery_app.task(
+    name="app.workers.tasks.apply_scheduled_job",
+    bind=True,
+    max_retries=3,
+    autoretry_for=TRANSIENT_ERRORS,
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=False,
+)
+def apply_scheduled_job(self: Any, task_name: str, payload: dict[str, Any]) -> bool:
+    """Execute one scheduled timer in a worker child (spec §7.3).
+
+    This is the body the broker owns: `CeleryScheduler.schedule` publishes one
+    deferred instance per timer, and whichever worker is free runs it when the
+    countdown expires. Handlers are resolved in the executing process (every
+    worker registers the same handlers at runtime build time). Idempotent by
+    handler contract: `_on_wave_timeout` / `_on_deadline` re-check the case
+    state, so a redelivered task (acks_late) changes nothing. An unknown
+    `task_name` raises: a lost timer must be loud, never silent.
+    """
+    from app.runtime import get_worker_runtime
+
+    handler = get_worker_runtime().scheduler.handler_for(task_name)
+    # The Handler port types the call as Awaitable; every registered handler
+    # is an async function, so the awaitable is always a real coroutine.
+    run_async(cast("Coroutine[Any, Any, None]", handler(payload)))
+    logger.info("worker_scheduled_job_applied", task_name=task_name)
+    return True
+
+
+async def _reconcile_stale_cases(
+    session_factory: async_sessionmaker[Any],
+    scheduler: "SimScheduler | CeleryScheduler",
+    now: datetime,
+) -> int:
+    """Re-enqueue the deadline job of every overdue case that still expects action.
+
+    Returns the number of timers re-enqueued. Idempotent by construction: the
+    `_on_deadline` handler re-checks the case status, so running this sweep
+    repeatedly (it fires every 60 s) is harmless.
+    """
+    from app.db.models import RescueCase
+    from app.domain.state_machine import State
+
+    recovered = 0
+    async with session_factory() as session:
+        stale = (
+            await session.execute(
+                select(RescueCase).where(
+                    RescueCase.status.in_([State.OPEN.value, State.OFFERING.value]),
+                    RescueCase.deadline_at <= now,
+                )
+            )
+        ).scalars()
+        for case in stale:
+            scheduler.schedule(_aware(case.deadline_at), "rescue_deadline", {"case_id": case.id})
+            recovered += 1
+    return recovered
+
+
+@celery_app.task(name="app.workers.tasks.reconcile_stale_cases")
+def reconcile_stale_cases() -> int:
+    """Beat sweep (every 60 s, spec §9.1: no rescue left stuck).
+
+    A crash between the database commit and the timer enqueue — or a restart
+    under the old in-memory scheduler — leaves a case past its deadline with
+    nobody coming. The sweep re-enqueues those deadline jobs and logs how many
+    it recovered; handlers re-check state, so a repeat is a no-op.
+    """
+    from app.runtime import get_worker_runtime
+
+    runtime = get_worker_runtime()
+    recovered = run_async(
+        _reconcile_stale_cases(
+            runtime.session_factory, runtime.scheduler, runtime.clock.now()
+        )
+    )
+    if recovered:
+        logger.warning("reconcile_stale_cases_recovered", count=recovered)
+    return recovered
+
+
+def _aware(moment: datetime) -> datetime:
+    """SQLite drops tzinfo on storage; treat naive values as UTC."""
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment
 
 
 @celery_app.task(name="app.workers.tasks.run_due_jobs")

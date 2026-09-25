@@ -50,6 +50,12 @@ def test_beat_schedule_runs_the_retention_purge_daily() -> None:
     assert cron.minute == {0}
 
 
+def test_beat_schedule_reconciles_stale_cases_every_minute() -> None:
+    entry = celery_app.conf.beat_schedule["reconcile-stale-cases"]
+    assert entry["task"] == "app.workers.tasks.reconcile_stale_cases"
+    assert entry["schedule"] == 60.0
+
+
 # --- task doubles -------------------------------------------------------------
 
 
@@ -148,6 +154,67 @@ def test_process_inbound_message_logs_the_sid(fake_runtime: FakeRuntime) -> None
     assert len(events) == 1
     assert events[0]["message_sid"] == "SM1"
     assert "body" not in str(events[0])
+
+
+# --- apply_scheduled_job: the deferred timer body (spec §7.3) -----------------
+
+
+def test_apply_scheduled_job_dispatches_to_the_registered_handler(
+    fake_runtime: FakeRuntime,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    async def handler(payload: dict[str, Any]) -> None:
+        seen.append(payload)
+
+    fake_runtime.scheduler.register("wave_timeout", handler)
+
+    result = tasks.apply_scheduled_job.apply(args=("wave_timeout", {"case_id": "case_1"}))
+
+    assert result.get() is True
+    assert seen == [{"case_id": "case_1"}]
+
+
+def test_apply_scheduled_job_fails_loudly_on_an_unknown_name(
+    fake_runtime: FakeRuntime,
+) -> None:
+    """A lost timer must be loud: an unknown task name is a permanent failure."""
+    result = tasks.apply_scheduled_job.apply(args=("no_such_timer", {"case_id": "case_1"}))
+
+    assert result.state == "FAILURE"
+    with pytest.raises(KeyError, match="no_such_timer"):
+        result.get()
+
+
+def test_apply_scheduled_job_retries_on_a_transient_failure(
+    fake_runtime: FakeRuntime, monkeypatch
+) -> None:
+    fake_runtime.scheduler.register(
+        "wave_timeout",
+        _failing_handler(OSError("connection reset")),
+    )
+    retry_calls: list[dict[str, Any]] = []
+    task_instance = tasks.apply_scheduled_job._orig_run.__self__
+
+    def fake_retry(exc: Exception, **kwargs: Any) -> Retry:
+        retry_calls.append({"exc": exc, **kwargs})
+        return Retry("retrying")
+
+    monkeypatch.setattr(task_instance, "retry", fake_retry)
+
+    result = tasks.apply_scheduled_job.apply(args=("wave_timeout", {"case_id": "case_1"}))
+
+    assert result.state == "RETRY"
+    assert isinstance(retry_calls[0]["exc"], OSError)
+    assert retry_calls[0]["countdown"] > 0
+    assert task_instance.max_retries == 3
+
+
+def _failing_handler(error: Exception):
+    async def handler(_payload: dict[str, Any]) -> None:
+        raise error
+
+    return handler
 
 
 # --- run_due_jobs: tick + snapshot (spec §9.3) --------------------------------

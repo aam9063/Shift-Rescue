@@ -135,7 +135,7 @@ describe('buildTodayColumns', () => {
     expect(columns.uncovered.map((s) => s.id)).toEqual(['shift_open'])
     expect(columns.seeking).toEqual([seeking])
     expect(columns.needsApproval).toEqual([approval])
-    expect(columns.covered.map((s) => s.id)).toEqual(['shift_covered'])
+    expect(columns.covered.map((s) => s.id)).toEqual(['shift_covered', 'shift_sched'])
   })
 
   it('excludes shifts with an active rescue from the uncovered column', () => {
@@ -144,10 +144,10 @@ describe('buildTodayColumns', () => {
     expect(columns.uncovered).toEqual([])
   })
 
-  it('keeps scheduled shifts out of every column', () => {
+  it('counts a scheduled shift as covered (staffed, not rescued)', () => {
     const columns = buildTodayColumns([scheduledShift], [], [])
     expect(columns.uncovered).toEqual([])
-    expect(columns.covered).toEqual([])
+    expect(columns.covered.map((s) => s.id)).toEqual(['shift_sched'])
   })
 })
 

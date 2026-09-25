@@ -1,8 +1,10 @@
 """Celery application (spec §7.2: queues, waves, timeouts, retries).
 
-Celery beat owns time: it ticks the scheduler (`run-due-jobs`, every 5 s) and
-runs the daily retention purge. Orchestration runs in the worker process via
-`app.runtime` — the API process only enqueues tasks (spec §7.5).
+Celery beat owns time: it ticks the scheduler (`run-due-jobs`, every 5 s,
+for the memory backend and the status snapshot), runs the reconcile sweep
+(`reconcile-stale-cases`, every 60 s) and the daily retention purge.
+Orchestration runs in the worker process via `app.runtime` — the API process
+only enqueues tasks (spec §7.5).
 """
 
 from celery import Celery
@@ -32,6 +34,13 @@ celery_app.conf.beat_schedule = {
     "run-due-jobs": {
         "task": "app.workers.tasks.run_due_jobs",
         "schedule": 5.0,
+    },
+    "reconcile-stale-cases": {
+        # Self-healing sweep (spec §9.1): re-enqueue deadline timers of
+        # overdue cases that still expect action. Handlers re-check state,
+        # so a repeated sweep is harmless.
+        "task": "app.workers.tasks.reconcile_stale_cases",
+        "schedule": 60.0,
     },
     "purge-old-messages": {
         "task": "app.workers.tasks.purge_old_messages",

@@ -104,7 +104,10 @@ export function buildTodayColumns(
     uncovered: shifts.filter((s) => s.status === 'open' && !shiftsWithRescue.has(s.id)),
     seeking: rescues.filter((r) => r.status === 'OFFERING'),
     needsApproval: approvals.filter((a) => a.status === 'pending'),
-    covered: shifts.filter((s) => s.status === 'covered'),
+    // Database vocabulary: `scheduled` = staffed normally (a normal day's rota,
+  // assigned and untouched); `covered` = filled by a rescue. Both mean a
+  // person is on the shift, so both count toward "Covered today".
+  covered: shifts.filter((s) => s.status === 'covered' || s.status === 'scheduled'),
   }
 }
 

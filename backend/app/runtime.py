@@ -20,9 +20,14 @@ from app.core.config import Settings, get_settings
 from app.db.session import create_engine_and_session
 from app.integrations.workforce.mock import MockWorkforceAdapter
 from app.services.orchestrator import RescueOrchestrator
+from app.workers.celery_scheduler import CeleryScheduler
 from app.workers.scheduler import SimScheduler
 
 logger = structlog.get_logger(__name__)
+
+# Timer backends (spec §7.3): the broker owns production timers; the in-memory
+# scheduler remains for single-process local runs, tests and the eval harness.
+Scheduler = SimScheduler | CeleryScheduler
 
 
 @dataclass(frozen=True)
@@ -33,7 +38,7 @@ class RescueRuntime:
     channel: TwilioWhatsAppChannel
     workforce: MockWorkforceAdapter
     clock: SystemClock
-    scheduler: SimScheduler
+    scheduler: Scheduler
     orchestrator: RescueOrchestrator
     interpreter: MessageInterpreter | None
 
@@ -74,8 +79,15 @@ class RescueRuntime:
         return True
 
 
-def build_runtime(settings: Settings) -> RescueRuntime:
-    """Construct the full rescue runtime exactly as the API service did."""
+def build_runtime(settings: Settings, *, scheduler: Scheduler | None = None) -> RescueRuntime:
+    """Construct the full rescue runtime exactly as the API service did.
+
+    The scheduler backend is injectable so tests and the eval harness keep
+    full control (`ShiftRescueTarget` builds `RescueRuntime` with a
+    `SimScheduler`); otherwise `settings.scheduler_backend` picks it: the
+    broker-backed `CeleryScheduler` in production, `SimScheduler` for the
+    single-process `memory` backend.
+    """
     # Pass the database URL explicitly: falling back to the ambient settings
     # would make the runtime silently ignore the settings it was given (and
     # connect to a developer's local database from tests).
@@ -86,9 +98,18 @@ def build_runtime(settings: Settings) -> RescueRuntime:
         auth_token=settings.twilio_auth_token,
         from_number=settings.twilio_whatsapp_from,
     )
-    scheduler = SimScheduler()
-    workforce = MockWorkforceAdapter(session_factory)
     clock = SystemClock()
+    if scheduler is None:
+        backend = settings.scheduler_backend
+        if backend == "celery":
+            scheduler = CeleryScheduler(clock)
+        elif backend == "memory":
+            scheduler = SimScheduler()
+        else:
+            raise ValueError(
+                f"Unknown scheduler_backend '{backend}' (expected 'celery' or 'memory')"
+            )
+    workforce = MockWorkforceAdapter(session_factory)
     interpreter = build_interpreter(settings)
     orchestrator = RescueOrchestrator(
         session_factory=session_factory,

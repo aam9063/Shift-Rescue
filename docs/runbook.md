@@ -213,6 +213,32 @@ If a message gets no reply, check in this order:
 | Pause the agent | Settings screen (or `PATCH /api/locations/<id>/settings`) |
 | Rotate the SSH key | create a new key pair, add the public key to `~/.ssh/authorized_keys`, update the `EC2_SSH_KEY` secret |
 
+### Timers (broker-owned, survive restarts)
+
+Timers (wave timeouts, rescue deadlines, approval expirations) are owned by
+the Redis broker, not by worker memory: scheduling a timer publishes one
+deferred Celery task (`apply_scheduled_job`) whose countdown is computed
+against the clock, and whichever worker child is free executes it when the
+countdown expires. Restarting the worker therefore never loses a pending
+timer. (The old per-process in-memory scheduler is the documented root cause
+of the "no timer ever fired" incident: each prefork child had its own queue.)
+
+Safety nets, in order:
+
+1. Handlers re-check state before acting (`_on_deadline` only escalates an
+   `OFFERING` case, `_on_wave_timeout` checks the `OFFERS_QUEUED` audit
+   marker), so a redelivered timer changes nothing.
+2. Beat runs `reconcile_stale_cases` every 60 s: any case still in
+   `OPEN`/`OFFERING` whose `deadline_at` has passed gets its deadline job
+   re-enqueued (log line `reconcile_stale_cases_recovered count=N`). This
+   recovers a timer lost to a crash between the database commit and the
+   enqueue.
+
+Beat still ticks `run-due-jobs` (5 s), which drives the `memory` scheduler
+backend (`SCHEDULER_BACKEND=memory`, for a single-process local run) and
+refreshes the API status snapshot. `SCHEDULER_BACKEND=celery` is the
+production default.
+
 ## 6. Incident playbook
 
 | Symptom | First checks | Fix |
@@ -226,7 +252,7 @@ If a message gets no reply, check in this order:
 | LLM cost rising unexpectedly | Langfuse traces, Ops screen | lower `LLM_MAX_TOKENS`, switch to a cheaper model, or set `LLM_PROVIDER=none` to stop spending |
 | No traces in Langfuse though the app works | `logs api \| grep tracing` | keys absent (logs `tracing_disabled`), wrong region host, or keys from another project |
 | `20003 Primary compliance profile` | Twilio Trust Hub profile `draft` | complete and submit the profile in Trust Hub |
-| Rescue stuck in OFFERING | `logs worker \| grep scheduler_ran_jobs` | the worker's scheduler drives timeouts (ticked by beat every 5 s); if the **worker** was restarted mid-flight, in-memory jobs were lost — re-run the flow |
+| Rescue looks stuck (no wave, no escalation) | `logs worker \| grep reconcile_stale_cases_recovered`; `docker compose ps` (worker and beat up?) | the reconcile sweep re-enqueues overdue deadline timers every 60 s, so a stuck case escalates within a minute of beat running; if it does not, check worker/beat are up and Redis is reachable — do not re-run the flow first |
 | Message gets no reply | see §4 checklist | API enqueues (`twilio_inbound_received`), worker processes (`worker_inbound_processed`); a `twilio_inbound_enqueue_failed` 500 means Redis/broker down — Twilio retries, recover Redis |
 | Timeouts/purge never fire | `docker compose ps` shows `beat` down | start beat: `docker compose up -d beat` — beat owns `run-due-jobs` (every 5 s) and the daily purge |
 | DB full / slow | `df -h`, `docker system df` | prune images (`docker image prune -f`), grow the EBS volume |
