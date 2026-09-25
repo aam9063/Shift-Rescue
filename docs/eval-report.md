@@ -7,12 +7,12 @@ failures found while building the project and how they were fixed.
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit | `cd backend && uv run pytest` | **308 passed** |
+| Backend unit | `cd backend && uv run pytest` | **435 passed, 2 skipped** |
 | Backend integration (real PostgreSQL) | `DATABASE_URL=... uv run pytest tests/integration -m integration` | **2 passed** |
 | Domain coverage gate (≥95%) | `uv run pytest --cov` | **100%** on `app/domain/` |
-| Frontend | `cd frontend && pnpm vitest run` | **83 passed** |
+| Frontend | `cd frontend && pnpm vitest run` | **119 passed** (17 files) |
 | Lint / types | `ruff check`, `mypy app` (strict), `oxlint` | clean |
-| Scenarios (§8.2) | `make eval` | **14/14 green, 0 invariant violations** |
+| Scenarios (§8.2) | `uv run pytest -q tests/unit/evals` | **15 scenarios green, 0 invariant violations** (27 tests) |
 
 ## 2. Scenario suite (`evals/scenarios/*.yaml`)
 
@@ -33,15 +33,18 @@ code** — never an LLM judge (§8.3). Minimum set per spec §8.2:
 | `shift_already_started` | remainder of a running shift can be covered |
 | `quiet_hours_deferred` | offers deferred to quiet-hours end |
 | `hris_failure_escalates` | retries ×3 → technical escalation |
+| `ghost_unconfirmed_escalates` | absence reported, never confirmed → deadline escalates to the manager (`OPEN` → `ESCALATED` with `manager_escalated`; the absence is never silently assumed, spec §5.4/§5.5) |
 | `llm_down_degraded` | provider down → deterministic parser keeps working |
 | `manipulation_and_health` | manipulation ignored, health details redacted |
 
 ## 3. Interpreter golden set (§8.1)
 
-`evals/golden/interpreter_golden.jsonl`: **150 labelled messages** covering
+`evals/golden/interpreter_golden.jsonl`: **155 labelled messages** covering
 accepts, declines, 20 conditionals with time extraction ("las 7 y cuarto" →
 07:15), reports (with and without health details), retractions, withdrawals,
-ambiguous input, questions, smalltalk, manipulation attempts and English.
+ambiguous input, questions, smalltalk, manipulation attempts and English —
+plus the shift-choice block (`golden_151..155`): replies to "¿de cuál te das de
+baja?" resolving one candidate by time, role, position or **day**.
 
 | Provider / prompt | Intent accuracy | Health detection | Conditional times | Avg latency | Avg cost | Verdict |
 |---|---|---|---|---|---|---|
@@ -50,7 +53,8 @@ ambiguous input, questions, smalltalk, manipulation attempts and English.
 | `gpt-4o-mini`, `interpreter_v1` | 0.86 | 0.9167 | 0.95 | 1051 ms | $0.000211 | **2 violations** (intent < 0.92, health < 0.95) |
 | `gpt-4o-mini`, `interpreter_v2` | 0.9333 | 1.0 | 0.85 | 1047 ms | $0.000298 | thresholds met |
 | `gpt-4o-mini`, `interpreter_v3` (accepted-offer marker) | 0.9867 | 1.0 | **0.75** | 1125 ms | $0.000341 | **1 violation** (times < 0.80): fixed the withdrawals, regressed the times |
-| `gpt-4o-mini`, `interpreter_v4` | **0.9933** | **1.0** | **1.0** | — | — | **thresholds met with 1 failure left** |
+| `gpt-4o-mini`, `interpreter_v4` | 0.9933 | 1.0 | 1.0 | — | — | thresholds met with 1 failure left |
+| `gpt-4o-mini`, `interpreter_v5` (shift-choice branch, 155 samples) | **0.9935** | **1.0** | **0.95** | — | — | **thresholds met, 1 failure left** |
 | `gpt-4o-mini`, `interpreter_v3` | pending parent measurement | — | — | — | — | **pending parent measurement** (fixture corrected, see below) |
 
 The v2 prompt added an explicit decision procedure keyed on the context the
@@ -95,6 +99,48 @@ answer with only a pending offer is OFFER_DECLINE.
 
 The parser baseline is deliberately low: it exists so the product still works
 when the LLM is unavailable, not to replace it.
+
+### 3.1 Shift-choice candidates are dated, and the context has a day anchor
+
+The first shift-choice fixtures sent candidates as
+`"<shift_id> <role> <HH:MM>-<HH:MM>"`, so a day reference ("el de hoy") could
+not resolve: the model had no way to map the phrase onto a candidate, and the
+deterministic path only knows the day from the clock. T1's format now sends
+each candidate with its start date,
+`"<shift_id> <role> <YYYY-MM-DD> <HH:MM>-<HH:MM>"` (location-local; the end
+time stays HH:MM, so a night shift crossing midnight reads `19:00-03:00`), and
+the orchestrator adds a `[today=YYYY-MM-DD]` anchor — without it, dated
+candidates alone still cannot say which date "hoy" is.
+
+`interpreter_v5` documents the dated format and maps its examples onto it
+("el de hoy" / "el de mañana" resolve against `[today]` and each candidate's
+date; ambiguity stays UNCLEAR; a bare "sí" in the shift-choice state identifies
+nothing). v5 was created and corrected inside the same uncommitted change and
+has never shipped, so it was edited in place: ADR-002's versioning rule exists
+to keep shipped prompts attributable, and inflating versions for an unreleased
+prompt would not improve attribution.
+
+Golden rows touched (only rows added by this change; every pre-existing row is
+byte-identical):
+
+- `golden_151..153`: context updated to the dated candidate format plus the
+  `today` anchor; expected labels unchanged ("el de las 15"/"el de barra"/
+  "el primero" still resolve as ABSENCE_REPORT).
+- `golden_154` ("el de hoy"): was UNCLEAR because the undated list made the
+  reply unresolvable; with one candidate dated today and one tomorrow it now
+  expects `ABSENCE_REPORT` with `shift_reference: "shift_a"`.
+- `golden_155` ("sí"): kept **byte-identical** by decision — a bare "sí" in the
+  shift-choice state answers nothing the agent asked and must stay UNCLEAR.
+  Note its context deliberately keeps the old undated format: the assertion is
+  format-independent and the decision pinned the row as is.
+
+**The context-contract guard.** `test_llm_context_contract_exact_key_set` pins,
+per state, the exact key set the orchestrator sends and the exact candidate
+strings — including `shifts_48h`, `pending_shift_choice` and the new `today`
+anchor. This is the test that would have caught all three fixture/production
+mismatches this feature fixed (withdrawal marker, pending confirmation, shift
+list): the golden fixtures describe the context production must send, and this
+test fails the moment either side drifts.
 
 ## 4. Failures found during development (and their fixes)
 

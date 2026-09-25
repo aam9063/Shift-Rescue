@@ -1,12 +1,15 @@
 """Orchestrator wiring: LLM interpreter first, deterministic parser fallback."""
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import select
 
 from app.agent.interpreter import PROMPT_VERSION, MessageInterpreter
 from app.agent.schemas import Interpretation
-from app.db.models import ApprovalRequest, Offer, RescueCase
+from app.db.models import ApprovalRequest, Offer, RescueCase, Shift
 from app.db.models import Interpretation as InterpretationRow
+from app.db.seed import DEMO_LOCATION_ID
 from tests.unit.services.helpers import build_world, run_to_offering
 
 CONVERSATION = "conv_1"
@@ -484,3 +487,146 @@ async def test_llm_confirmation_advances_the_case() -> None:
 
     assert case.status == "OFFERING"
     assert len(offers) == 3
+
+
+async def test_llm_context_contract_exact_key_set() -> None:
+    """The exact interpreter context per state, no more and no less.
+
+    This is the test that would have caught all three fixture/production
+    mismatches (withdrawal marker, pending confirmation, shift list): the
+    golden fixtures describe exactly this key set, so any key the prompt
+    branches on that the orchestrator stops sending fails here instead of in
+    the demo.
+    """
+    def keys(recorded: dict) -> set[str]:
+        # `prompt_version` is added by MessageInterpreter, not the orchestrator.
+        return set(recorded) - {"prompt_version"}
+
+    # Case 1 — plain message, nothing pending: the shift list is there.
+    world, _ = await build_world(floor_count=4)
+    llm = ScriptedLLM([{"intent": "SMALLTALK", "confidence": 0.9}])
+    world.orchestrator.interpreter = MessageInterpreter(llm=llm)
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_ctx1",
+        employee_id="emp_01_floor",
+        provider_message_id="ctxc_1",
+        text="hola",
+    )
+    assert keys(llm.contexts[-1]) == {
+        "rescue_id",
+        "pending_offers",
+        "accepted_offers",
+        "shifts_48h",
+        "today",
+    }
+    # Dated candidates: the day rides in the string so "el de hoy" can resolve.
+    assert llm.contexts[-1]["shifts_48h"] == ["shift_1 sala 2026-10-03 15:00-23:00"]
+    assert llm.contexts[-1]["today"] == "2026-10-03"
+
+    # Case 2 — after ask_which_shift: the pending choice is the same candidates.
+    # Both shifts start the same day (2026-10-03) so the deterministic
+    # day-resolution cannot answer the report by itself and the agent has to ask.
+    world, _ = await build_world(floor_count=4)
+    async with world.session_factory() as session:
+        session.add(
+            Shift(
+                id="shift_2",
+                location_id=DEMO_LOCATION_ID,
+                role="bar",
+                starts_at=world.now + timedelta(hours=4, minutes=20),
+                ends_at=world.now + timedelta(hours=12, minutes=20),
+                employee_id="emp_01_floor",
+                status="scheduled",
+            )
+        )
+        await session.commit()
+    llm = ScriptedLLM(
+        [
+            {"intent": "ABSENCE_REPORT", "confidence": 0.95},
+            {"intent": "UNCLEAR", "confidence": 0.3},
+        ]
+    )
+    world.orchestrator.interpreter = MessageInterpreter(llm=llm)
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_ctx2",
+        employee_id="emp_01_floor",
+        provider_message_id="ctxc_2",
+        text="hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_ctx2",
+        employee_id="emp_01_floor",
+        provider_message_id="ctxc_3",
+        text="cualquier cosa",
+    )
+    assert keys(llm.contexts[-1]) == {
+        "rescue_id",
+        "pending_offers",
+        "accepted_offers",
+        "shifts_48h",
+        "today",
+        "pending_shift_choice",
+    }
+    assert llm.contexts[-1]["pending_shift_choice"] == llm.contexts[-1]["shifts_48h"]
+    # Exact dated candidate strings (same list the prompt renders); the end
+    # time stays HH:MM per the format, so a night shift crossing midnight
+    # reads 19:00-03:00 — its day is always the START date.
+    assert llm.contexts[-1]["shifts_48h"] == [
+        "shift_1 sala 2026-10-03 15:00-23:00",
+        "shift_2 barra 2026-10-03 19:00-03:00",
+    ]
+
+    # Case 3 — pending offers (a candidate was offered; that employee has no
+    # shifts, so `shifts_48h` is absent: keys exist only when meaningful).
+    world, _ = await build_world(floor_count=4)
+    llm = ScriptedLLM(
+        [
+            {"intent": "ABSENCE_REPORT", "confidence": 0.95},
+            {"intent": "ABSENCE_CONFIRM", "confidence": 0.98},
+        ]
+    )
+    world.orchestrator.interpreter = MessageInterpreter(llm=llm)
+    await run_to_offering(world)
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_ctx3",
+        employee_id="emp_02_floor",
+        provider_message_id="ctxc_4",
+        text="hola",
+    )
+    assert keys(llm.contexts[-1]) == {
+        "rescue_id",
+        "pending_offers",
+        "accepted_offers",
+    }
+    assert llm.contexts[-1]["pending_offers"]
+
+    # Case 4 — OPEN case awaiting the absence confirmation.
+    world, _ = await build_world(floor_count=4)
+    llm = ScriptedLLM(
+        [
+            {"intent": "ABSENCE_REPORT", "confidence": 0.95},
+            {"intent": "UNCLEAR", "confidence": 0.3},
+        ]
+    )
+    world.orchestrator.interpreter = MessageInterpreter(llm=llm)
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_ctx4",
+        employee_id="emp_01_floor",
+        provider_message_id="ctxc_5",
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_ctx4",
+        employee_id="emp_01_floor",
+        provider_message_id="ctxc_6",
+        text="hola",
+    )
+    assert keys(llm.contexts[-1]) == {
+        "rescue_id",
+        "pending_offers",
+        "accepted_offers",
+        "shifts_48h",
+        "today",
+        "pending_confirmation",
+    }
+    assert llm.contexts[-1]["pending_confirmation"] == "shift_1"

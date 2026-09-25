@@ -1,0 +1,12 @@
+id: ghost_unconfirmed_escalates
+description: Absence reported but never confirmed; the deadline escalates to the manager.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "hoy no puedo ir"
+  confirm: false
+expect:
+  final_state: ESCALATED
+  templates_sent: [absence_confirm, manager_escalated]
+  invariants: all

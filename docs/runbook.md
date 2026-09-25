@@ -201,6 +201,35 @@ If a message gets no reply, check in this order:
 4. `logs worker | grep llm_disabled` — the agent may be answering as the
    deterministic parser (see §2.1).
 
+### Demo without a second phone
+
+The **Demo simulator** screen drives the real pipeline from the dashboard, so
+the whole rescue story can be reproduced in under a minute with no second
+WhatsApp phone:
+
+1. Log in as the demo manager and open **Simulator**. The phone frames show
+   the real employees (`GET /api/employees?location_id=`) with their real
+   conversation threads.
+2. Type as any employee and send: the API enqueues the *same* Celery task the
+   Twilio webhook enqueues (`POST /dev/simulator/<employee_id>/messages`), so
+   interpretation, threading, auditing and delivery behave exactly as with a
+   real message. The message lands in the employee's real conversation and
+   the Today board opens a rescue when the text reports an absence.
+3. Use the demo clock to skip waiting: `+10 min` / `+1h` call
+   `POST /dev/clock/advance`, which moves a Redis-backed offset shared by the
+   API and the worker (`DemoClock`) and immediately enqueues the reconcile
+   sweep, so overdue cases escalate in seconds.
+
+**Gate:** these routes only exist when the app runs as a demo environment
+(`APP_ENV=local`, `test` or `demo`; see `Settings.demo_clock_enabled`). In
+production the router is not even registered — `GET /dev/clock` answers 404 —
+and every route still requires a manager JWT.
+
+**Known limitation:** broker timers (wave timeouts, offer expirations) keep
+their real-time ETA — advancing the demo clock does not fast-forward a wave
+timeout. Deadlines, escalations and employee replies are what the demo needs,
+and those do follow the demo clock; the Simulator screen says so in one line.
+
 ## 5. Common operations
 
 | Task | Command (on the instance, in `/opt/shift-rescue`) |

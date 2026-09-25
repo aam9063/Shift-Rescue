@@ -8,11 +8,32 @@ from datetime import timedelta
 
 from sqlalchemy import func, select
 
+from app.agent.interpreter import MessageInterpreter
 from app.db.models import AuditEvent, Message, Offer, RescueCase, Shift
 from app.db.seed import DEMO_LOCATION_ID
 
 CONVERSATION = "conv_1"
 PROVIDER_ID = "provider_msg_1"
+
+
+class RefLLM:
+    """Scripted LLM: classifies the report, then names shift_2 in the reply."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.contexts: list[dict] = []
+        self.last_usage = None
+
+    async def interpret(self, message_body: str, context: dict) -> dict:
+        self.calls += 1
+        self.contexts.append(dict(context))
+        if self.calls == 1:
+            return {"intent": "ABSENCE_REPORT", "confidence": 0.95}
+        return {
+            "intent": "ABSENCE_REPORT",
+            "confidence": 0.9,
+            "shift_reference": "shift_2",
+        }
 
 
 async def test_absence_report_sends_confirmation_and_no_case_yet(world, db, now) -> None:
@@ -167,6 +188,182 @@ async def test_two_shifts_same_day_asks_which_one(world) -> None:
     asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
     assert len(asks) == 1
     assert "15:00" in asks[0]["body"] and "19:00" in asks[0]["body"]
+
+
+async def test_shift_choice_reply_with_reference_opens_that_case(world, db, now) -> None:
+    """LLM path: the reply names a candidate via shift_reference and the case
+    opens for that shift — the question the agent asked has an answer path."""
+    async with world.session_factory() as session:
+        session.add(
+            Shift(
+                id="shift_2",
+                location_id=DEMO_LOCATION_ID,
+                role="bar",
+                starts_at=now + timedelta(hours=4, minutes=20),
+                ends_at=now + timedelta(hours=12, minutes=20),
+                employee_id="emp_01_floor",
+                status="scheduled",
+            )
+        )
+        await session.commit()
+
+    llm = RefLLM()
+    world.orchestrator.interpreter = MessageInterpreter(llm=llm)
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="choice_1",
+        text="hoy no puedo ir",
+    )
+    asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
+    assert len(asks) == 1
+    # The report call saw the shift list, not a pending choice.
+    assert llm.contexts[0]["shifts_48h"]
+    assert "pending_shift_choice" not in llm.contexts[0]
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="choice_2",
+        text="el de las 19:00",
+    )
+    # Resolved without asking again.
+    asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
+    assert len(asks) == 1
+    # The reply call carried the pending choice: same candidates as shifts_48h.
+    assert llm.contexts[1]["pending_shift_choice"] == llm.contexts[1]["shifts_48h"]
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+    assert case.shift_id == "shift_2"
+    assert case.status == "OPEN"
+    assert world.channel.with_template("absence_confirm")
+
+
+async def test_degraded_mode_resolves_shift_choice_by_day(world, db, now) -> None:
+    """Degraded mode: "mañana" deterministically picks the tomorrow shift."""
+    async with world.session_factory() as session:
+        session.add(
+            Shift(
+                id="shift_2",
+                location_id=DEMO_LOCATION_ID,
+                role="bar",
+                starts_at=now + timedelta(days=1, hours=4),
+                ends_at=now + timedelta(days=1, hours=12),
+                employee_id="emp_01_floor",
+                status="scheduled",
+            )
+        )
+        await session.commit()
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="no puedo ir",
+    )
+    asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
+    assert len(asks) == 1
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="no puedo ir mañana",
+    )
+    asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
+    assert len(asks) == 1  # resolved without asking again
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+    assert case.shift_id == "shift_2"
+    assert case.status == "OPEN"
+
+
+async def test_unresolvable_shift_choice_asks_once_more_then_redirects(world, db, now) -> None:
+    """Never guess: one re-ask, then the polite redirect (spec §5.5)."""
+    async with world.session_factory() as session:
+        session.add(
+            Shift(
+                id="shift_2",
+                location_id=DEMO_LOCATION_ID,
+                role="bar",
+                starts_at=now + timedelta(hours=4, minutes=20),
+                ends_at=now + timedelta(hours=12, minutes=20),
+                employee_id="emp_01_floor",
+                status="scheduled",
+            )
+        )
+        await session.commit()
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="no puedo ir, en serio",
+    )
+    asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
+    assert len(asks) == 2  # the question was re-sent exactly once
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_3",
+        text="no puedo ir",
+    )
+    asks = [m for m in world.channel.sent if m["template_key"] == "ask_which_shift"]
+    assert len(asks) == 2
+    redirects = [m for m in world.channel.sent if m["template_key"] == "out_of_scope"]
+    assert len(redirects) == 1
+    async with db() as session:
+        cases = (await session.execute(select(func.count()).select_from(RescueCase))).scalar_one()
+    assert cases == 0  # never guessed between the two candidates
+
+
+async def test_unconfirmed_absence_escalates_when_deadline_passes(world, db) -> None:
+    """Ghost case: reported, never confirmed — the deadline escalates to the
+    manager, and running the scheduler again never duplicates it (§5.5)."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+    assert case.status == "OPEN"
+
+    world.clock.advance(timedelta(minutes=11))
+    await world.scheduler.run_due(world.clock.now())
+
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+        escalations = (
+            await session.execute(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.type == "ESCALATED")
+            )
+        ).scalar_one()
+    assert case.status == "ESCALATED"
+    assert world.channel.with_template("manager_escalated")
+    assert escalations == 1
+
+    await world.scheduler.run_due(world.clock.now())
+    async with db() as session:
+        escalations = (
+            await session.execute(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.type == "ESCALATED")
+            )
+        ).scalar_one()
+    assert escalations == 1
 
 
 async def test_confirm_without_pending_gets_polite_redirect(world) -> None:

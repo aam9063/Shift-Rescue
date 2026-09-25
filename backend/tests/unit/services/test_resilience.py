@@ -309,9 +309,10 @@ async def test_reconcile_stale_cases_enqueues_only_overdue_non_terminal_cases() 
         open_case = (
             await session.execute(select(RescueCase).where(RescueCase.id == "case_open_overdue"))
         ).scalar_one()
-        assert open_case.status == "OPEN"  # the deadline handler only acts on OFFERING
+        # New rule (§5.4/§5.5): an unconfirmed absence is not silently assumed —
+        # an overdue OPEN case escalates to the manager at the deadline.
+        assert open_case.status == "ESCALATED"
 
-    # Safe to run repeatedly: the sweep re-enqueues only the still-overdue
-    # OPEN case (its deadline handler no-ops on it); the ESCALATED one is
-    # terminal and never comes back.
-    assert await _reconcile_stale_cases(world.session_factory, world.scheduler, now) == 1
+    # Safe to run repeatedly: both overdue cases are terminal now, so the sweep
+    # re-enqueues nothing — a terminal case never comes back.
+    assert await _reconcile_stale_cases(world.session_factory, world.scheduler, now) == 0

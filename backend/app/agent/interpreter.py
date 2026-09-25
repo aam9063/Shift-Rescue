@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from app.agent.schemas import Interpretation
 from app.ports import LLMClient
 
-PROMPT_VERSION = "interpreter_v4"
+PROMPT_VERSION = "interpreter_v5"
 
 FALLBACK = Interpretation(intent="UNCLEAR", confidence=0.0)
 
