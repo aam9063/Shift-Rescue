@@ -1,0 +1,21 @@
+# GitGuardian configuration.
+#
+# The findings that appear in this repository are false positives:
+# environment-variable *references* and clearly-labelled local development
+# placeholders. Real secrets live in SSM Parameter Store (production) or in the
+# untracked `backend/.env` (development) — never in Git.
+version: 2
+
+secret:
+  ignored-paths:
+    - "backend/.env.example"
+    - "backend/env.example"
+  ignored-matches:
+    - name: "Compose variable interpolation for the database password"
+      match: "POSTGRES_PASSWORD"
+    - name: "Local development compose credentials (not used in production)"
+      match: "shift_rescue:shift_rescue"
+    - name: "Development-only placeholders"
+      match: "dev-only-secret"
+    - name: "Development-only demo password hash marker"
+      match: "demo-not-a-real-hash"

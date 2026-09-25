@@ -1,0 +1,97 @@
+# Production stack (spec §7.2, §15) — deployed on a single t3.large EC2 instance.
+#
+# DECISION (user): Langfuse is **Langfuse Cloud** (free tier) — the observability
+# is exported over OTLP using LANGFUSE_* env vars, so no Langfuse containers,
+# no ClickHouse and no extra Postgres live on the instance (docs/assumptions.md A4).
+#
+# Only these services run here: postgres, redis, api, worker, beat and caddy.
+# Images come from ECR; secrets come from SSM Parameter Store into `.env`
+# (see infra/deploy/remote-deploy.sh).
+
+name: shift-rescue
+
+x-app-env: &app-env
+  env_file:
+    - .env
+  environment:
+    APP_ENV: production
+    DATABASE_URL: postgresql+asyncpg://shift_rescue:${POSTGRES_PASSWORD}@postgres:5432/shift_rescue
+    REDIS_URL: redis://redis:6379/0
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shift_rescue
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: shift_rescue
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shift_rescue"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    image: ${ECR_REGISTRY}/shift-rescue-api:${IMAGE_TAG:-latest}
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: ${ECR_REGISTRY}/shift-rescue-api:${IMAGE_TAG:-latest}
+    <<: *app-env
+    command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    image: ${ECR_REGISTRY}/shift-rescue-api:${IMAGE_TAG:-latest}
+    <<: *app-env
+    command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: ${ECR_REGISTRY}/shift-rescue-web:${IMAGE_TAG:-latest}
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:

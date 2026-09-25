@@ -37,3 +37,22 @@ deployment.
   asserting utility class names on primitives.
 - **Consequence:** Exact DESIGN.md values are enforced at test time without a
   browser; visual verification still requires the demo environment.
+
+## A4 — Langfuse Cloud instead of self-hosted Langfuse (2026-09-24, deploy)
+
+- **Instruction (user, late-breaking):** for the AWS EC2 deployment, use
+  **Langfuse Cloud** (free tier) instead of self-hosting Langfuse. No
+  Langfuse-owned Postgres/ClickHouse/Redis on the instance. Configure only
+  `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and
+  `LANGFUSE_HOST=https://cloud.langfuse.com` (or the EU regional host) so the
+  OpenTelemetry SDK exports traces directly.
+- **Consequence:** `docker-compose.prod.yml` hosts only FastAPI, Celery
+  worker, Celery beat, Redis (broker/locks) and Shift Rescue's own
+  PostgreSQL. Instance sizing drops to **t3.large (2 vCPU, 8 GB)** — no
+  t3.xlarge needed.
+- **Where documented:** the deployment ADR (ADR-003, written with the
+  `deploy-delivery` feature) must capture this decision and the savings vs
+  self-hosting. The dev compose keeps Langfuse behind an optional profile as
+  a local alternative only.
+- **Spec amendment:** spec §9.1 said "Langfuse self-hosted"; amended by this
+  instruction (spec §0 rule 5: scope changes update intent and tasks).

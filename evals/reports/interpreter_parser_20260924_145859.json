@@ -1,0 +1,338 @@
+{
+  "provider": "parser (offline baseline)",
+  "total": 150,
+  "intent_accuracy": 0.3733,
+  "f1_per_intent": {
+    "UNCLEAR": 0.316,
+    "QUESTION": 0.0,
+    "OFFER_WITHDRAW": 0.0,
+    "OFFER_ACCEPT": 0.72,
+    "OFFER_CONDITIONAL": 0.0,
+    "ABSENCE_REPORT": 0.605,
+    "ABSENCE_CONFIRM": 0.824,
+    "OFFER_DECLINE": 0.4,
+    "ABSENCE_RETRACT": 0.308,
+    "SMALLTALK": 0.0
+  },
+  "health_detection": 0.0,
+  "conditional_time_accuracy": 0.0,
+  "avg_latency_ms": 0.0,
+  "avg_cost_usd": 0.0,
+  "confusion": {
+    "ABSENCE_REPORT->UNCLEAR": 14,
+    "ABSENCE_CONFIRM->UNCLEAR": 3,
+    "OFFER_ACCEPT->UNCLEAR": 7,
+    "OFFER_DECLINE->UNCLEAR": 12,
+    "OFFER_CONDITIONAL->UNCLEAR": 21,
+    "ABSENCE_RETRACT->UNCLEAR": 9,
+    "OFFER_WITHDRAW->UNCLEAR": 8,
+    "OFFER_WITHDRAW->ABSENCE_REPORT": 3,
+    "QUESTION->UNCLEAR": 11,
+    "SMALLTALK->UNCLEAR": 6
+  },
+  "failures": [
+    {
+      "id": "golden_005",
+      "message": "me duele la cabeza, hoy imposible",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_006",
+      "message": "vomité toda la noche, hoy no voy",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_007",
+      "message": "tengo una migraña horrible",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_008",
+      "message": "me han dado covid, de baja",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_010",
+      "message": "hoy no voy",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_014",
+      "message": "hoy imposible voy mal",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_015",
+      "message": "no voy a llegar, estoy fatal",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_018",
+      "message": "estoy de baja",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_019",
+      "message": "no podre ir hoy",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_021",
+      "message": "imposible hoy, siento mucho las molestias",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_023",
+      "message": "no me encuentro bien nada",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_024",
+      "message": "hoy no voy a poder asistir",
+      "expected": "ABSENCE_REPORT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_033",
+      "message": "si, confirmado",
+      "expected": "ABSENCE_CONFIRM",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_034",
+      "message": "ok no voy",
+      "expected": "ABSENCE_CONFIRM",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_035",
+      "message": "sí, no voy",
+      "expected": "ABSENCE_CONFIRM",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_042",
+      "message": "ok dale",
+      "expected": "OFFER_ACCEPT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_044",
+      "message": "sí, puedo",
+      "expected": "OFFER_ACCEPT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_046",
+      "message": "alli estaré",
+      "expected": "OFFER_ACCEPT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_048",
+      "message": "si claro",
+      "expected": "OFFER_ACCEPT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_049",
+      "message": "vale, sin problema",
+      "expected": "OFFER_ACCEPT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_050",
+      "message": "sí, ahí estaré",
+      "expected": "OFFER_ACCEPT",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_052",
+      "message": "no puedo",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_056",
+      "message": "hoy no puedo",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_057",
+      "message": "imposible, perdón",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_058",
+      "message": "no, tengo plan",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_059",
+      "message": "no voy a poder",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_060",
+      "message": "perdona pero no",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_061",
+      "message": "no puedo hoy",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_062",
+      "message": "lo siento, no",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_063",
+      "message": "no me va bien",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_064",
+      "message": "triste pero no",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_065",
+      "message": "no puedo cubrirlo",
+      "expected": "OFFER_DECLINE",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_066",
+      "message": "llego a las 7:15",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_067",
+      "message": "llego a las 7 y cuarto",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_068",
+      "message": "sobre las 8 llego",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_069",
+      "message": "llego a las 9",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_070",
+      "message": "puedo desde las 10",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_071",
+      "message": "hasta mediodía puedo",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_072",
+      "message": "puedo hasta las 12",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_073",
+      "message": "estoy hasta las 14:30",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_074",
+      "message": "llego a las 19:30",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_075",
+      "message": "puedo de 7 a 12",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_076",
+      "message": "puedo de 8 a 14",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_077",
+      "message": "llego a las 16:45",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_078",
+      "message": "hasta las 11 y me voy",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_079",
+      "message": "sobre las 21 puedo",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_080",
+      "message": "llego a las 7:15 de la tarde",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_081",
+      "message": "puedo hasta las 23:30",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_082",
+      "message": "llego a las 6 y media",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    },
+    {
+      "id": "golden_083",
+      "message": "de 9 a 15 si puedo",
+      "expected": "OFFER_CONDITIONAL",
+      "actual": "UNCLEAR"
+    }
+  ],
+  "git_sha": "341646f",
+  "ran_at": "2026-09-24T14:58:59.224228+00:00",
+  "prompt_version": "interpreter_v1"
+}

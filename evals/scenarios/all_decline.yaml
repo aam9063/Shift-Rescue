@@ -1,0 +1,21 @@
+id: all_decline
+description: Every candidate declines; waves exhausted; escalate.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "hoy no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 1
+      text: "no"
+  emp_03_floor:
+    - after_minutes: 2
+      text: "no"
+  emp_04_floor:
+    - after_minutes: 3
+      text: "no"
+expect:
+  final_state: ESCALATED
+  templates_sent: [manager_escalated]
+  invariants: all

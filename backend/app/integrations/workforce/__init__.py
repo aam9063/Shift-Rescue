@@ -1,0 +1,1 @@
+"""Workforce adapter implementations."""

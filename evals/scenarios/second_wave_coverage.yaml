@@ -1,0 +1,16 @@
+id: second_wave_coverage
+description: Wave 1 does not answer; wave 2 covers.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 5
+shift_starts_in_minutes: 180
+absence:
+  employee: emp_01_floor
+  message: "hoy no voy a poder ir"
+personas:
+  emp_05_floor:
+    - after_minutes: 11
+      text: "si"
+expect:
+  final_state: COVERED
+  covering_employee_in: [emp_05_floor]
+  invariants: all

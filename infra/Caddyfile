@@ -1,0 +1,31 @@
+# Caddy: automatic HTTPS (Let's Encrypt) + SPA + API reverse proxy.
+# DOMAIN is injected by docker-compose.prod.yml (e.g. 1-2-3-4.sslip.io, which
+# resolves to the instance's Elastic IP without owning a domain).
+
+{$DOMAIN} {
+	encode gzip zstd
+
+	# Twilio webhooks, REST API, websockets and docs go to FastAPI.
+	@backend path /api/* /webhooks/* /ws/* /health /docs /docs/* /openapi.json
+	handle @backend {
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the manager dashboard (single-page app).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

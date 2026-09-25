@@ -1,0 +1,17 @@
+id: conditional_approved
+description: Candidate accepts with a different schedule; manager approves.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "hoy no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 2
+      text: "llego a las 7 y cuarto"
+manager:
+  - after_minutes: 5
+    decision: approved
+expect:
+  final_state: PARTIALLY_COVERED
+  invariants: all

@@ -1,0 +1,102 @@
+name: shift-rescue
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shift_rescue
+      POSTGRES_PASSWORD: shift_rescue
+      POSTGRES_DB: shift_rescue
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shift_rescue"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ../backend
+    # backend/.env feeds the container (Twilio, LLM keys, DEMO_REAL_PHONES…).
+    # The `environment` block below still wins for in-network URLs.
+    env_file:
+      - path: ../backend/.env
+        required: false
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ../backend
+    command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    env_file:
+      - path: ../backend/.env
+        required: false
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: ../backend
+    command: ["uv", "run", "--no-dev", "celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - path: ../backend/.env
+        required: false
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # OPTIONAL local Langfuse for development only.
+  # DECISION (user): production/EC2 uses Langfuse Cloud (free tier) — no
+  # Langfuse containers on the instance; see docs/assumptions.md (A4) and the
+  # deployment ADR. Start locally with:
+  #   docker compose --profile observability up -d
+  langfuse:
+    image: langfuse/langfuse:2
+    profiles: ["observability"]
+    environment:
+      DATABASE_URL: postgresql://shift_rescue:shift_rescue@postgres:5432/shift_rescue
+      NEXTAUTH_SECRET: dev-only-secret
+      SALT: dev-only-salt
+      NEXTAUTH_URL: http://localhost:3000
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

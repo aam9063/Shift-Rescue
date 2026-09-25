@@ -1,0 +1,17 @@
+id: absent_retracts_cancel
+description: Absent employee comes back; manager approves cancellation.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 4
+absence:
+  employee: emp_01_floor
+  message: "hoy no puedo ir"
+personas:
+  emp_01_floor:
+    - after_minutes: 3
+      text: "al final si puedo ir"
+manager:
+  - after_minutes: 5
+    decision: approved
+expect:
+  final_state: CANCELLED
+  invariants: all

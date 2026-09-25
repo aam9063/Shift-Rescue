@@ -1,0 +1,16 @@
+id: quiet_hours_deferred
+description: Report at 23:30; offers deferred to 07:00; then covered.
+now: "2026-10-03T23:30:00+02:00"
+floor_count: 4
+timezone: Europe/Madrid
+shift_starts_in_minutes: 580
+absence:
+  employee: emp_01_floor
+  message: "manana no puedo ir"
+personas:
+  emp_02_floor:
+    - after_minutes: 450
+      text: "si"
+expect:
+  final_state: COVERED
+  invariants: all

@@ -1,0 +1,11 @@
+id: no_candidates
+description: No eligible candidates exist; escalate immediately.
+now: "2026-10-03T14:40:00+02:00"
+floor_count: 1
+absence:
+  employee: emp_01_floor
+  message: "me encuentro fatal, hoy no puedo ir"
+expect:
+  final_state: ESCALATED
+  templates_sent: [manager_escalated]
+  invariants: all
