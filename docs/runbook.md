@@ -18,10 +18,15 @@ demo environment (single EC2 instance + Langfuse Cloud, see ADR-003).
 ## 2. Deploy
 
 ```bash
-# From GitHub: Actions → "Deploy demo" → Run workflow (or push to main).
-# Locally (equivalent):
-git push origin main
+# From GitHub: Actions → "Deploy demo" → Run workflow (manual by design).
 ```
+
+The workflow is **manual**: the demo instance is provisioned on demand to keep
+the cost under control. It runs a preflight that fails with a clear message if
+any of the four repository secrets is missing
+(`AWS_DEPLOY_ROLE_ARN`, `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`). Once the
+instance exists and the secrets are set, add `push: branches: [main]` back to
+the trigger to get continuous delivery.
 
 The workflow builds both images, pushes them to ECR, copies
 `infra/docker-compose.prod.yml`, `infra/Caddyfile` and

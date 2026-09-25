@@ -92,7 +92,7 @@ export function OpsScreen() {
           </h2>
           <LineChart
             values={metrics.costHistory}
-            ariaLabel="Coste diario de LLM"
+            ariaLabel="Daily LLM cost"
             leftCaption="14 days ago"
             rightCaption="hoy"
           />
