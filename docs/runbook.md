@@ -230,6 +230,20 @@ their real-time ETA — advancing the demo clock does not fast-forward a wave
 timeout. Deadlines, escalations and employee replies are what the demo needs,
 and those do follow the demo clock; the Simulator screen says so in one line.
 
+### Check responsiveness
+
+Open DevTools device toolbar and walk the four widths; nothing should scroll
+horizontally at any of them:
+
+- **360px (phone):** every screen reachable from the header hamburger drawer;
+  the two wide tables render as stacked cards; no horizontal scrollbar; pills
+  and drawer items feel comfortably tappable (44px minimum).
+- **768px (tablet):** the drawer is gone and the main nav is inline; Settings
+  and Evals show two columns; the tables render as tables.
+- **1024px (desktop):** the operator nav appears; Evals and Ops show their full
+  multi-column layout.
+- **1440px:** content caps at 1440px wide with the extra cream margin.
+
 ## 5. Common operations
 
 | Task | Command (on the instance, in `/opt/shift-rescue`) |

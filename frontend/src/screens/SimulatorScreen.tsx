@@ -83,7 +83,7 @@ function EmployeePhone({ employee }: { employee: SimulatorEmployee }) {
         <button
           type="submit"
           aria-label={`Send message to ${employee.displayName}`}
-          className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95"
+          className="pointer-coarse:size-11 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95"
         >
           <svg viewBox="0 0 16 16" className="size-4 fill-white" aria-hidden="true">
             <path d="M1 8 15 1 9.5 15 7.8 9.2 1 8Z" />
@@ -131,7 +131,7 @@ export function SimulatorScreen() {
               key={preset.seconds}
               type="button"
               onClick={() => advance(preset.seconds)}
-              className="cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white active:scale-95"
+              className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white active:scale-95"
             >
               {preset.label}
             </button>
@@ -142,7 +142,7 @@ export function SimulatorScreen() {
         </div>
         <button
           type="button"
-          className="cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-text-primary active:scale-95"
+          className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-text-primary active:scale-95"
         >
           Load scenario: acceptance race
         </button>

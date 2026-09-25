@@ -458,6 +458,8 @@ Control de acceso: `manager` ve las pantallas 1 a 5 y 7 solo de sus locales; `op
 
 El objetivo de diseño de la demo: pantalla dividida con el móvil de un empleado a un lado y el timeline del rescate al otro, viendo cómo el turno se cubre en tiempo real.
 
+Toda pantalla del dashboard debe ser usable desde 360px de ancho hacia arriba (contrato responsivo en `DESIGN.md` §8 y su apéndice A).
+
 ### 7.7 Estructura del repositorio
 
 ```

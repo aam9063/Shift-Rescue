@@ -58,7 +58,7 @@ export function SettingsScreen() {
             aria-checked={draft.agentPaused}
             aria-label="Pausar agente"
             onClick={() => setDraft({ ...draft, agentPaused: !draft.agentPaused })}
-            className={`relative h-7 w-12 cursor-pointer rounded-full transition-colors ${
+            className={`relative h-7 w-12 cursor-pointer rounded-full transition-colors after:absolute after:-inset-2.5 after:content-[''] ${
               draft.agentPaused ? 'bg-error' : 'bg-black/15'
             }`}
           >
@@ -91,7 +91,7 @@ export function SettingsScreen() {
                   }
                   setDraft({ ...draft, rankingWeights: next })
                 }}
-                className="mt-1 h-1.5 w-full cursor-pointer rounded-full bg-green-accent"
+                className="relative mt-1 h-1.5 w-full cursor-pointer rounded-full bg-green-accent after:absolute after:-inset-[19px] after:content-['']"
               />
             </div>
           ))}
@@ -100,7 +100,7 @@ export function SettingsScreen() {
 
       <div className="rounded-card bg-surface p-5 shadow-card">
         <h2 className="mb-4 text-lg font-semibold tracking-tight">Waves</h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block text-sm tracking-tight text-text-secondary">
             Candidates per wave
             <input
@@ -132,7 +132,7 @@ export function SettingsScreen() {
 
       <div className="rounded-card bg-surface p-5 shadow-card">
         <h2 className="mb-4 text-lg font-semibold tracking-tight">Quiet hours</h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block text-sm tracking-tight text-text-secondary">
             From
             <input
@@ -157,7 +157,7 @@ export function SettingsScreen() {
       <button
         type="button"
         onClick={handleSave}
-        className="cursor-pointer rounded-pill bg-green-accent px-6 py-3 text-sm font-semibold tracking-tight text-white transition-all duration-200 active:scale-95"
+        className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-green-accent px-6 py-3 text-sm font-semibold tracking-tight text-white transition-all duration-200 active:scale-95"
       >
         Save changes
       </button>

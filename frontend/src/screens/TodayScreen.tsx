@@ -185,7 +185,7 @@ function ApprovalCard({
         <button
           type="button"
           onClick={onReview}
-          className="mt-3 w-full cursor-pointer rounded-pill bg-gold px-4 py-2 text-sm font-semibold tracking-tight text-green-house transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
+          className="pointer-coarse:min-h-11 mt-3 w-full cursor-pointer rounded-pill bg-gold px-4 py-2 text-sm font-semibold tracking-tight text-green-house transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
         >
           Review approval
         </button>

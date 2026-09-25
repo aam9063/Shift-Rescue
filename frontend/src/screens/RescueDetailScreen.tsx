@@ -67,7 +67,7 @@ function Hero({ detail, now, onBack }: { detail: RescueDetail; now: Date; onBack
         <button
           type="button"
           onClick={onBack}
-          className="cursor-pointer text-sm font-medium tracking-tight text-white/80 transition-colors hover:text-white"
+          className="pointer-coarse:min-h-11 inline-flex cursor-pointer items-center text-sm font-medium tracking-tight text-white/80 transition-colors hover:text-white"
         >
           ‹ Back to Today
         </button>

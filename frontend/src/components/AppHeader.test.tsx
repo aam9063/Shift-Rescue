@@ -47,6 +47,17 @@ describe('AppHeader (dark-green band per user mockups)', () => {
     renderHeader()
     expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument()
   })
+
+  // jsdom evaluates no media queries: this pins the desktop class contract so
+  // the mobile drawer cannot regress the desktop navs. The parent verifies the
+  // visual result at 1024px/1440px.
+  it('keeps the desktop navs on their hidden md:flex / hidden lg:flex classes', () => {
+    renderHeader()
+    const main = screen.getByRole('navigation', { name: 'Main' })
+    expect(main).toHaveClass('hidden', 'md:flex')
+    const operator = screen.getByRole('navigation', { name: 'Operator' })
+    expect(operator).toHaveClass('hidden', 'lg:flex')
+  })
 })
 
 function renderHeader(

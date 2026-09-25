@@ -42,7 +42,8 @@ export function LineChart({
         role="img"
         aria-label={ariaLabel}
         viewBox={`0 0 ${width} ${height}`}
-        className="h-40 w-full"
+        preserveAspectRatio="xMidYMid meet"
+        className="h-auto w-full"
         data-testid="line-chart"
       >
         {refY != null && (

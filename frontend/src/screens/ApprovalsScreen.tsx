@@ -23,7 +23,7 @@ function ApprovalItem({ approval }: { approval: ApprovalRequest }) {
           type="button"
           disabled={isPending}
           onClick={() => decide(approval.id, 'rejected')}
-          className="cursor-pointer rounded-pill border border-black/15 bg-transparent px-5 py-2 text-sm font-semibold tracking-tight text-text-primary transition-all duration-200 hover:bg-black/5 active:scale-95 disabled:opacity-50"
+          className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/15 bg-transparent px-5 py-2 text-sm font-semibold tracking-tight text-text-primary transition-all duration-200 hover:bg-black/5 active:scale-95 disabled:opacity-50"
         >
           Reject
         </button>
@@ -31,7 +31,7 @@ function ApprovalItem({ approval }: { approval: ApprovalRequest }) {
           type="button"
           disabled={isPending}
           onClick={() => decide(approval.id, 'approved')}
-          className="cursor-pointer rounded-pill bg-green-accent px-6 py-2 text-sm font-semibold tracking-tight text-white transition-all duration-200 hover:opacity-90 active:scale-95 disabled:opacity-50"
+          className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-green-accent px-6 py-2 text-sm font-semibold tracking-tight text-white transition-all duration-200 hover:opacity-90 active:scale-95 disabled:opacity-50"
         >
           Approve
         </button>

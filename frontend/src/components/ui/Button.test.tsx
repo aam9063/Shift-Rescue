@@ -45,6 +45,16 @@ describe('Button (DESIGN.md pill button)', () => {
     expect(button).toHaveClass('text-white')
   })
 
+  // Touch-target regression (DESIGN.md §8: pills must reach 44px on touch
+  // surfaces without changing the desktop look). jsdom evaluates no media
+  // queries, so this pins the pointer-coarse variant class instead.
+  it('meets the 44px touch-target floor on touch surfaces only', () => {
+    render(<Button>Touch</Button>)
+    const button = screen.getByRole('button', { name: 'Touch' })
+    expect(button).toHaveClass('pointer-coarse:min-h-11')
+    expect(button).not.toHaveClass('min-h-11')
+  })
+
   it('handles clicks and can be disabled', async () => {
     const onClick = vi.fn()
     render(

@@ -50,13 +50,19 @@ export function useConversations(): { conversations: Conversation[] } {
   return { conversations: query.data ?? [] }
 }
 
-export function useAgentDecisions(): { decisions: AgentDecision[] } {
+export function useAgentDecisions(): {
+  decisions: AgentDecision[]
+  error: unknown
+  isLoading: boolean
+} {
   const query = useQuery({
     queryKey: ['agent-decisions'],
     queryFn: isMockMode() ? async () => AGENT_DECISIONS : fetchAgentDecisions,
     staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
-  return { decisions: query.data ?? [] }
+  // The endpoint is operator-only (spec §7.5), so a manager gets a 403 here:
+  // the screen must say so instead of rendering an empty table that looks broken.
+  return { decisions: query.data ?? [], error: query.error, isLoading: query.isLoading }
 }
 
 export function useEvalRun(): { evalRun: EvalRunSummary | undefined } {

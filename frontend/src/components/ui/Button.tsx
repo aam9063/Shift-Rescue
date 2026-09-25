@@ -20,12 +20,14 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 /**
  * Full-pill button per DESIGN.md: 50px radius on every button without
  * exception, tight tracking, and the signature scale(0.95) active press.
+ * On touch surfaces the pill grows to the 44px touch-target floor
+ * (DESIGN.md §8) without changing the desktop look.
  */
 export function Button({ variant = 'primary', className = '', type = 'button', ...rest }: ButtonProps) {
   return (
     <button
       type={type}
-      className={`rounded-pill border px-4 py-[7px] font-semibold tracking-tight transition-all duration-200 ease-in-out active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${variantClasses[variant]} ${className}`}
+      className={`pointer-coarse:min-h-11 rounded-pill border px-4 py-[7px] font-semibold tracking-tight transition-all duration-200 ease-in-out active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${variantClasses[variant]} ${className}`}
       {...rest}
     />
   )

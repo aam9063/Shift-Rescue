@@ -36,7 +36,7 @@ export function EvalsScreen() {
         screen shows mock results.
       </p>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+      <div data-testid="evals-grid" className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-5">
         <div className="space-y-4 rounded-card bg-surface p-6 shadow-card lg:col-span-3">
           <h2 className="text-lg font-semibold tracking-tight">
             Intent accuracy, last 10 runs

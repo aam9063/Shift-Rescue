@@ -62,4 +62,19 @@ describe('SettingsScreen draft sync', () => {
       'false',
     )
   })
+
+  // Responsive contract (DESIGN.md §8). jsdom evaluates no media queries, so
+  // this pins the CSS classes of both form grids; the parent verifies the
+  // visual result at 360px.
+  it('stacks both form grids to one column below md', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['settings'], FIRST)
+    renderScreen(client)
+
+    await screen.findByRole('switch', { name: 'Pausar agente' })
+    const wavesGrid = screen.getByLabelText('Candidates per wave').closest('div.grid')
+    const quietGrid = screen.getByLabelText('From').closest('div.grid')
+    expect(wavesGrid).toHaveClass('grid-cols-1', 'md:grid-cols-2')
+    expect(quietGrid).toHaveClass('grid-cols-1', 'md:grid-cols-2')
+  })
 })
