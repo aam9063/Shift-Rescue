@@ -10,6 +10,7 @@ state (spec §6.1, ADR-002).
 """
 
 import asyncio
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -86,6 +87,7 @@ class StrandsLLMClient:
         prompt = self._build_prompt(message_body, context)
         agent = self._agent_factory()
 
+        started = time.perf_counter()
         result: Any = None
         last_error: Exception | None = None
         for _attempt in range(self._retries + 1):
@@ -100,10 +102,11 @@ class StrandsLLMClient:
             self.breaker.record_failure(now)
             raise last_error if last_error else RuntimeError("LLM invocation failed")
 
+        elapsed_ms = (time.perf_counter() - started) * 1000
         self.breaker.record_success()
-        return self._extract(result)
+        return self._extract(result, elapsed_ms)
 
-    def _extract(self, result: Any) -> dict[str, Any]:
+    def _extract(self, result: Any, elapsed_ms: float) -> dict[str, Any]:
         structured = getattr(result, "structured_output", None)
         if structured is None:
             raise ValueError("Agent returned no structured output")
@@ -113,15 +116,40 @@ class StrandsLLMClient:
             payload = Interpretation(**structured).model_dump()
         else:
             raise ValueError("Unexpected structured output type")
-        self.last_usage = self._usage_of(result)
+        self.last_usage = self._usage_of(result, elapsed_ms)
         return payload
 
-    def _usage_of(self, result: Any) -> dict[str, Any]:
+    def _usage_of(self, result: Any, elapsed_ms: float) -> dict[str, Any]:
+        """Token/latency/cost metering (spec §9.2).
+
+        Strands 1.56 reports `EventLoopMetrics.accumulated_usage` with
+        camelCase keys and `accumulated_metrics['latencyMs']`; the snake_case
+        names of earlier versions are still accepted. Wall-clock time is the
+        fallback because the SDK reports 0 for latency in some releases.
+        """
         metrics = getattr(result, "metrics", None)
-        raw_usage = getattr(metrics, "usage", None) if metrics is not None else None
-        input_tokens = float(getattr(raw_usage, "input_tokens", 0) or 0)
-        output_tokens = float(getattr(raw_usage, "output_tokens", 0) or 0)
-        latency = float(getattr(metrics, "total_cycle_time", 0) or 0)
+        raw_usage = (
+            getattr(metrics, "accumulated_usage", None)
+            or getattr(metrics, "usage", None)
+            or {}
+        )
+
+        def token(*names: str) -> float:
+            for name in names:
+                value = raw_usage.get(name) if isinstance(raw_usage, dict) else None
+                if value:
+                    return float(value)
+            return 0.0
+
+        input_tokens = token("inputTokens", "input_tokens")
+        output_tokens = token("outputTokens", "output_tokens")
+        cached_input_tokens = token("cacheReadInputTokens", "cache_read_input_tokens")
+        provider_latency = 0.0
+        accumulated = getattr(metrics, "accumulated_metrics", None)
+        if isinstance(accumulated, dict):
+            provider_latency = float(accumulated.get("latencyMs", 0) or 0)
+        # Cached reads are billed at a discount by the provider but counted at
+        # full price here: the number is a conservative upper bound.
         cost = (
             input_tokens / 1000 * self._price["input"]
             + output_tokens / 1000 * self._price["output"]
@@ -130,7 +158,8 @@ class StrandsLLMClient:
             "model": self._model_id,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "latency_ms": latency,
+            "cached_input_tokens": cached_input_tokens,
+            "latency_ms": provider_latency or round(elapsed_ms, 1),
             "cost_usd": cost,
         }
 

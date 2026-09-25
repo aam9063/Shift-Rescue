@@ -187,6 +187,44 @@ variables no code ever read (`LLM_PROVIDER_INTERPRETER`, `NAN_API_KEY`,
 the ADR-004 names (backup at `backend/.env.bak`); the gateway credentials are
 preserved as commented lines, reachable as `OPENAI_BASE_URL`.
 
+### Real provider calls (OpenAI `gpt-4o-mini`, `scripts/verify_llm.py`)
+
+Two defects that only a live call could reveal — both invisible to the unit
+suite because the test doubles were more forgiving than the SDK:
+
+1. **`prompt_version` collision (crash).** `StrandsLLMClient` returns the whole
+   `Interpretation` dump, which already contains `prompt_version`, while
+   `MessageInterpreter` passed it again as a keyword argument →
+   `TypeError: got multiple values for keyword argument 'prompt_version'`, which
+   surfaced as `ProviderUnavailableError` and silently degraded every message to
+   the parser. Fixed by merging (`{**raw, "prompt_version": ...}`) with a
+   regression test that feeds a *full* payload.
+2. **Metering read fields that no longer exist.** Strands 1.56 reports
+   `EventLoopMetrics.accumulated_usage` in camelCase (`inputTokens`,
+   `outputTokens`, `cacheReadInputTokens`) and latency in
+   `accumulated_metrics['latencyMs']`; the client read `metrics.usage` and
+   `metrics.total_cycle_time`, so every call was metered as 0 tokens / $0.
+   Fixed with version-tolerant extraction plus a wall-clock latency fallback,
+   tested against the real camelCase shape and the legacy snake_case one.
+
+After the fixes:
+
+```
+[ABSENCE_REPORT    ] confidence=0.98 latency=1697ms tokens=1157/38 cost=$0.000196
+[ABSENCE_REPORT    ] confidence=0.95 latency=1056ms tokens=1147/60 cost=$0.000208
+[OFFER_CONDITIONAL ] confidence=0.90 latency=2750ms tokens=1156/59 cost=$0.000209
+```
+
+Acceptance criterion 2 verified. Two observations to act on:
+
+- **Latency**: interpret calls land at 1.0–2.8 s, above the “p95 < 1.2 s”
+  target advertised in the Ops mockup. The measured time includes the Strands
+  agent cycle, so either the target moves to ~2.5 s or the system prompt (≈1.1 k
+  input tokens per call) is trimmed. Cost is unaffected either way.
+- **Prompt size**: ~1150 input tokens per short message, of which ~1024 are
+  served from the provider's prompt cache (`cacheReadInputTokens`), so the
+  uncached cost is lower than the conservative estimate above.
+
 ### Pending
 
 Real OpenAI interpretation (acceptance criterion 2) needs `OPENAI_API_KEY` in
