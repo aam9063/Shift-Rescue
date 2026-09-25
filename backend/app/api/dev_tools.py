@@ -150,6 +150,32 @@ async def advance_demo_clock(
     return DemoClockOut(now=iso_utc(clock.now()), offsetSeconds=offset)
 
 
+@router.post("/clock/reset", response_model=DemoClockOut)
+async def reset_demo_clock(
+    _principal: ManagerPrincipal = Depends(current_manager),
+    client: Redis = Depends(get_demo_redis),
+) -> DemoClockOut:
+    """Zero the shared demo-clock offset and sweep for overdue cases.
+
+    A leftover offset silently moves "now" for the whole worker (today's
+    shifts read as already finished and the agent answers "out of scope"), so
+    undoing an advance is a real backend operation, not a client trick: the
+    offset is set back to zero in Redis and the reconcile sweep runs
+    immediately, exactly as after an advance.
+    """
+    try:
+        client.set(DEMO_CLOCK_OFFSET_KEY, "0")
+    except (RedisError, OSError) as error:
+        logger.error("demo_clock_reset_failed", error=str(error)[:200])
+        raise HTTPException(status_code=503, detail="Demo clock is unavailable") from None
+    clock = DemoClock(redis_offset_source(client))
+    # Sweep immediately: cases whose deadline moved back with the clock stop
+    # escalating on stale evidence, same rule as the advance route.
+    reconcile_stale_cases.delay()
+    logger.info("demo_clock_reset")
+    return DemoClockOut(now=iso_utc(clock.now()), offsetSeconds=clock.offset_seconds())
+
+
 @router.get("/clock", response_model=DemoClockOut)
 async def get_demo_clock(
     _principal: ManagerPrincipal = Depends(current_manager),

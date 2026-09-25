@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Offer, RescueCase, RescueDetail, SimulatorEmployee } from '../domain/types'
@@ -10,6 +10,7 @@ import {
   fetchDemoClock,
   fetchRescueDetail,
   fetchSimulatorEmployees,
+  resetDemoClock,
   sendSimulatorMessage,
 } from '../services/api'
 import { isMockMode } from '../services/dataSource'
@@ -22,6 +23,7 @@ vi.mock('../services/api', () => ({
   sendSimulatorMessage: vi.fn(),
   fetchDemoClock: vi.fn(),
   advanceDemoClock: vi.fn(),
+  resetDemoClock: vi.fn(),
   fetchActiveRescues: vi.fn(),
   fetchRescueDetail: vi.fn(),
 }))
@@ -50,6 +52,15 @@ const EMPLOYEES: SimulatorEmployee[] = [
     shiftStatus: null,
     conversationId: null,
   },
+  {
+    id: 'emp_3',
+    displayName: 'Iker Kitchen',
+    roles: ['kitchen'],
+    shiftStartsAt: '2026-10-03T14:00:00+00:00',
+    shiftEndsAt: '2026-10-03T18:00:00+00:00',
+    shiftStatus: 'scheduled',
+    conversationId: 'conv_3',
+  },
 ]
 
 function renderScreen() {
@@ -75,6 +86,10 @@ beforeEach(() => {
   vi.mocked(advanceDemoClock).mockResolvedValue({
     now: '2026-10-03T15:21:00+00:00',
     offsetSeconds: 600,
+  })
+  vi.mocked(resetDemoClock).mockResolvedValue({
+    now: '2026-10-03T15:11:00+00:00',
+    offsetSeconds: 0,
   })
   vi.mocked(fetchActiveRescues).mockResolvedValue([])
   vi.mocked(fetchRescueDetail).mockRejectedValue(new Error('no rescue detail expected'))
@@ -153,6 +168,88 @@ describe('SimulatorScreen (spec §7.6, real data)', () => {
     renderScreen()
 
     expect(await screen.findByText('15:11')).toBeInTheDocument()
+  })
+
+  it('labels each frame with the employee situation against the virtual clock', async () => {
+    renderScreen()
+
+    // Clock 15:11: Iker (14-18) is on shift now; Ana starts at 17:00; Bruno
+    // has no shift today.
+    expect(await screen.findByText('On shift now')).toBeInTheDocument()
+    expect(screen.getByText('Starts at 17:00')).toBeInTheDocument()
+    expect(screen.getByText('No shift today')).toBeInTheDocument()
+  })
+
+  it('orders the frames so the actionable employees come first', async () => {
+    renderScreen()
+
+    await screen.findByText('On shift now')
+    const frames = screen.getAllByTestId('employee-frame')
+    // The API order was Ana, Bruno, Iker; on-shift Iker must lead.
+    expect(within(frames[0]).getByText('Iker Kitchen')).toBeInTheDocument()
+    expect(within(frames[1]).getByText('Ana Floor')).toBeInTheDocument()
+    expect(within(frames[2]).getByText('Bruno Bar')).toBeInTheDocument()
+  })
+
+  it('explains when nobody can report an absence right now', async () => {
+    vi.mocked(fetchSimulatorEmployees).mockResolvedValue([
+      {
+        id: 'emp_1',
+        displayName: 'Ana Floor',
+        roles: ['floor'],
+        shiftStartsAt: '2026-10-03T07:00:00+00:00',
+        shiftEndsAt: '2026-10-03T15:00:00+00:00',
+        shiftStatus: 'absent',
+        conversationId: 'conv_1',
+      },
+      {
+        id: 'emp_2',
+        displayName: 'Bruno Bar',
+        roles: ['bar'],
+        shiftStartsAt: null,
+        shiftEndsAt: null,
+        shiftStatus: null,
+        conversationId: null,
+      },
+    ])
+    renderScreen()
+
+    expect(
+      await screen.findByText(/Nobody is on shift right now/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Reseed the demo data/)).toBeInTheDocument()
+    expect(await screen.findByText('Ended at 15:00')).toBeInTheDocument()
+  })
+
+  it('shows the offset in human terms and explains a non-zero one', async () => {
+    vi.mocked(fetchDemoClock).mockResolvedValue({
+      now: '2026-10-03T21:00:00+00:00',
+      offsetSeconds: 23400,
+    })
+    renderScreen()
+
+    // +6 h 30 m: the leftover-offset situation that motivated the feature.
+    expect((await screen.findAllByText(/\+6 h 30 m ahead/)).length).toBeGreaterThan(0)
+    expect(
+      screen.getByText(/The agent's "now" is shifted \+6 h 30 m ahead/),
+    ).toBeInTheDocument()
+  })
+
+  it('resets the demo clock through the endpoint', async () => {
+    vi.mocked(fetchDemoClock).mockResolvedValue({
+      now: '2026-10-03T21:00:00+00:00',
+      offsetSeconds: 23400,
+    })
+    const user = userEvent.setup()
+    renderScreen()
+    expect((await screen.findAllByText(/\+6 h 30 m ahead/)).length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('button', { name: 'Reset clock' }))
+
+    expect(resetDemoClock).toHaveBeenCalledTimes(1)
+    // The reset answer puts the clock back on real time.
+    expect(await screen.findByText(/on real time/)).toBeInTheDocument()
+    expect(screen.queryByText(/\+6 h 30 m ahead/)).not.toBeInTheDocument()
   })
 
   it('sends a message through the simulator endpoint', async () => {

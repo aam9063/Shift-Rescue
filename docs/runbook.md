@@ -218,7 +218,9 @@ WhatsApp phone:
 3. Use the demo clock to skip waiting: `+10 min` / `+1h` call
    `POST /dev/clock/advance`, which moves a Redis-backed offset shared by the
    API and the worker (`DemoClock`) and immediately enqueues the reconcile
-   sweep, so overdue cases escalate in seconds.
+   sweep, so overdue cases escalate in seconds. **Reset** calls
+   `POST /dev/clock/reset`, which zeroes the offset and runs the sweep again —
+   one click undoes any advance.
 
 **Gate:** these routes only exist when the app runs as a demo environment
 (`APP_ENV=local`, `test` or `demo`; see `Settings.demo_clock_enabled`). In
@@ -229,6 +231,29 @@ and every route still requires a manager JWT.
 their real-time ETA — advancing the demo clock does not fast-forward a wave
 timeout. Deadlines, escalations and employee replies are what the demo needs,
 and those do follow the demo clock; the Simulator screen says so in one line.
+
+### Before a demo (checklist)
+
+1. **Reset the demo clock.** A leftover advance persists in Redis and silently
+   moves "now" for the whole worker: today's shifts read as already finished,
+   the agent answers "out of scope", and database timestamps jump into the
+   future. Open the Simulator and press **Reset clock** (or
+   `curl -X POST .../dev/clock/reset` with a manager token) until it reads
+   `on real time`.
+2. **Confirm at least one employee is on shift now.** The Simulator marks each
+   frame with the employee's situation: *On shift now* (green), *Starts at
+   HH:MM*, *Ended at HH:MM* or *No shift today*. Only *On shift now* employees
+   can report an absence — frames in any other state can only produce the
+   correct "out of scope" reply. If nobody is on shift (the day is over),
+   reseed the demo data (§5) or reset the clock to move "now" back; the screen
+   shows a banner at the top when nobody can act.
+3. **Walk one rescue end to end**: send an absence message from an *on shift
+   now* frame, watch the Today table open the rescue, and use `+10 min` to
+   escalate. Finish by resetting the clock again.
+
+The offset is shown next to the clock in human terms (`+2 h 30 m ahead`) and,
+while non-zero, explained in one line on the screen — nobody should have to
+diagnose a database timestamp again.
 
 ### Check responsiveness
 

@@ -28,6 +28,7 @@ import {
   fetchSettings,
   fetchSimulatorEmployees,
   fetchSystemStatus,
+  resetDemoClock,
   saveSettings,
   sendSimulatorMessage,
 } from './api'
@@ -163,10 +164,15 @@ export function useDemoThread(conversationId: string | null): { messages: ChatMe
 
 /** The demo clock (spec §7.5): the shared virtual time, advanced in Redis in
  * live mode and locally in mock mode. The UI states the honest limitation:
- * broker timers keep their real-time ETA. */
+ * broker timers keep their real-time ETA. `reset` zeroes the offset — a
+ * leftover advance silently moves "now" for the whole worker. */
 export function useDemoClock(): {
   time: string | undefined
+  offsetSeconds: number | undefined
+  /** Virtual "now" as a Date, for computing roster situations. */
+  virtualNow: Date | undefined
   advance: (seconds: number) => void
+  reset: () => void
   isAdvancing: boolean
 } {
   const queryClient = useQueryClient()
@@ -178,15 +184,25 @@ export function useDemoClock(): {
     enabled: !mockMode,
     staleTime: 0,
   })
-  const mutation = useMutation({
+  const invalidateBoards = () => {
+    // Deadlines and escalations moved: the Today board and every thread
+    // reflect the new virtual time on the next render.
+    void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+    void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+    void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+  }
+  const advanceMutation = useMutation({
     mutationFn: (seconds: number) => advanceDemoClock(seconds),
     onSuccess: (clock) => {
       queryClient.setQueryData(['demo-clock'], clock)
-      // Deadlines and escalations moved: the Today board and every thread
-      // reflect the new virtual time on the next render.
-      void queryClient.invalidateQueries({ queryKey: ['shifts'] })
-      void queryClient.invalidateQueries({ queryKey: ['rescues'] })
-      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      invalidateBoards()
+    },
+  })
+  const resetMutation = useMutation({
+    mutationFn: () => resetDemoClock(),
+    onSuccess: (clock) => {
+      queryClient.setQueryData(['demo-clock'], clock)
+      invalidateBoards()
     },
   })
   const advance = (seconds: number) => {
@@ -198,12 +214,23 @@ export function useDemoClock(): {
       })
       return
     }
-    mutation.mutate(seconds)
+    advanceMutation.mutate(seconds)
+  }
+  const reset = () => {
+    if (mockMode) {
+      // Back to the documented mock demo time.
+      setMockTime('15:11')
+      return
+    }
+    resetMutation.mutate()
   }
   return {
     time: mockMode ? mockTime : (query.data ? formatVirtualTime(query.data.now) : undefined),
+    offsetSeconds: mockMode ? 0 : query.data?.offsetSeconds,
+    virtualNow: query.data ? new Date(query.data.now) : undefined,
     advance,
-    isAdvancing: mutation.isPending,
+    reset,
+    isAdvancing: advanceMutation.isPending || resetMutation.isPending,
   }
 }
 

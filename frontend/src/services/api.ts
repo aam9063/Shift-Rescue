@@ -310,3 +310,9 @@ export async function advanceDemoClock(seconds: number): Promise<DemoClockWire> 
     body: JSON.stringify({ seconds }),
   })
 }
+
+/** Zero the shared demo-clock offset; the backend also enqueues the reconcile
+ * sweep. A leftover offset silently moves "now" for the whole worker. */
+export async function resetDemoClock(): Promise<DemoClockWire> {
+  return apiFetch<DemoClockWire>('/dev/clock/reset', { method: 'POST' })
+}

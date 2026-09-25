@@ -40,7 +40,7 @@ class StubTask:
 
 
 class FakeRedis:
-    """Minimal Redis stand-in: `get`/`incrby` over the offset key only."""
+    """Minimal Redis stand-in: `get`/`set`/`incrby` over the offset key only."""
 
     def __init__(self, initial: int | None = None) -> None:
         self.values: dict[str, str] = (
@@ -49,6 +49,9 @@ class FakeRedis:
 
     def get(self, key: str) -> str | None:
         return self.values.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self.values[key] = value
 
     def incrby(self, key: str, amount: int) -> str:
         self.values[key] = str(int(self.values.get(key, "0")) + amount)
@@ -200,6 +203,31 @@ async def test_clock_advance_rejects_an_unsane_bound(dev_client) -> None:
     assert response.status_code == 422
 
 
+async def test_clock_reset_zeroes_the_offset_and_enqueues_the_sweep(
+    dev_client, fake_redis, stub_sweep
+) -> None:
+    # A leftover offset from testing (+18 h 50 m) is exactly the case reset
+    # exists for: the whole worker saw "now" a day ahead.
+    fake_redis.values[DEMO_CLOCK_OFFSET_KEY] = "67800"
+    before = datetime.now(UTC)
+
+    response = await dev_client.post("/dev/clock/reset", headers=auth_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["offsetSeconds"] == 0
+    assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == "0"
+    assert stub_sweep.calls == [()]
+    virtual = datetime.fromisoformat(body["now"])
+    assert abs(virtual - before) < timedelta(seconds=5)
+
+
+async def test_clock_reset_requires_a_token(dev_client) -> None:
+    response = await dev_client.post("/dev/clock/reset")
+
+    assert response.status_code == 401
+
+
 async def test_get_clock_reports_virtual_time_and_offset(dev_client, fake_redis) -> None:
     empty = await dev_client.get("/dev/clock", headers=auth_headers())
     assert empty.status_code == 200
@@ -237,9 +265,11 @@ async def test_dev_routes_are_not_advertised_or_served_in_production(world, monk
     async with client as async_client:
         paths = application.openapi()["paths"]
         clock_response = await async_client.get("/dev/clock", headers=auth_headers())
+        reset_response = await async_client.post("/dev/clock/reset", headers=auth_headers())
 
     assert not [path for path in paths if "/dev/" in path]
     assert clock_response.status_code == 404
+    assert reset_response.status_code == 404
     application.dependency_overrides.clear()
     get_settings.cache_clear()
 
