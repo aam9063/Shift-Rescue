@@ -77,3 +77,43 @@ async def test_unpaused_agent_works_normally(world, db) -> None:
     async with db() as session:
         cases = (await session.execute(select(func.count()).select_from(RescueCase))).scalar_one()
         assert cases == 1
+
+
+async def test_outbound_hourly_limit_blocks_extra_messages(world, db) -> None:
+    """Spec §9.4: at most N outbound messages per employee per hour."""
+    import dataclasses
+
+    world.orchestrator._config = dataclasses.replace(
+        world.orchestrator._config, max_outbound_per_hour=1
+    )
+
+    await _report(world, provider_id="p1")
+    assert len(world.channel.with_template("absence_confirm")) == 1
+
+    # A second report for the same employee would exceed the limit.
+    await _report(world, provider_id="p2")
+    assert len(world.channel.with_template("absence_confirm")) == 1, "limit not enforced"
+
+    async with db() as session:
+        audits = [a.type for a in (await session.execute(select(AuditEvent))).scalars()]
+    assert "OUTBOUND_LIMIT_EXCEEDED" in audits
+    assert "OUTBOUND_LIMIT_ALERT" in audits
+
+
+async def test_outbound_limit_does_not_affect_other_employees(world) -> None:
+    import dataclasses
+
+    world.orchestrator._config = dataclasses.replace(
+        world.orchestrator._config, max_outbound_per_hour=1
+    )
+
+    # Employee A reports (1 message), then the rescue offers go to B/C/D
+    # (one each) — everyone stays within their own limit.
+    await _report(world, provider_id="p1")
+    await world.orchestrator.handle_inbound(
+        conversation_id="conv_1",
+        employee_id="emp_01_floor",
+        provider_message_id="p2",
+        text="sí",
+    )
+    assert len(world.channel.with_template("offer")) == 3
