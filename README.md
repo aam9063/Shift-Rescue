@@ -51,6 +51,29 @@ docker compose -f infra/docker-compose.yml --profile observability up -d
 # Langfuse on http://localhost:3000 (wired with the evals-observability feature)
 ```
 
+## Deployed demo
+
+The demo runs on a single EC2 instance (Docker Compose + Caddy with automatic
+TLS) with images from ECR, secrets in SSM Parameter Store and GitHub Actions
+authenticated by OIDC. Observability exports to **Langfuse Cloud**, so no
+Langfuse/ClickHouse containers live on the box (see
+[ADR-003](docs/adr/ADR-003-deployment-aws.md) and `docs/runbook.md`).
+
+| Component | Where |
+|---|---|
+| Dashboard | `https://<domain>/` (SSR-free SPA behind Caddy) |
+| API + Twilio webhooks | `https://<domain>/api`, `https://<domain>/webhooks/twilio/*` |
+| Workers | EC2 containers `worker` + `beat` |
+| Data | PostgreSQL 16 + Redis on the instance (EBS volume) |
+| Traces | Langfuse Cloud (OTLP with `LANGFUSE_*`) |
+
+Deploy from GitHub: **Actions → Deploy demo → Run workflow** (or push to
+`main`). Rollback: re-run the remote script with a previous image tag —
+`./deploy/remote-deploy.sh <commit-sha>`.
+
+Docs: [runbook](docs/runbook.md) · [eval report](docs/eval-report.md) ·
+[demo script](docs/demo-script.md) · [Twilio sandbox setup](docs/twilio-sandbox-setup.md).
+
 ## Repository layout
 
 ```
@@ -77,7 +100,12 @@ Demo credentials (created by `make seed`): `manager@laterraza.demo`
 
 - [Product & engineering specification](docs/SHIFT_RESCUE_SPEC.md)
 - [ADR-001: foundation stack](docs/adr/ADR-001-foundation-stack.md)
-- [Assumptions log](docs/assumptions.md)
+- [ADR-002: Strands without the autonomous loop](docs/adr/ADR-002-strands-without-autonomous-loop.md)
+- [ADR-003: demo deployment on AWS](docs/adr/ADR-003-deployment-aws.md)
+- [Evaluation report](docs/eval-report.md) · [Runbook](docs/runbook.md) ·
+  [Demo script](docs/demo-script.md)
+- [Twilio sandbox setup](docs/twilio-sandbox-setup.md) ·
+  [Assumptions log](docs/assumptions.md)
 
 ## License
 
