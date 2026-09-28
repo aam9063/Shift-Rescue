@@ -121,13 +121,69 @@ def _shift(
     )
 
 
-def _shifts() -> list[Shift]:
+def _demo_anchors(shifts: list[Shift], now: datetime) -> list[Shift]:
+    """Two extra shifts that keep a demo day usable at any hour.
+
+    The rotation has fixed windows (07:00, 15:00, 23:00...), so a demo late in
+    the evening finds today's shifts already finished and tomorrow's outside the
+    roster's "today": the Simulator then has nobody who can report an absence and
+    the board looks dead. When the day is dry, two shifts are anchored to the
+    current hour instead — one in progress, one starting soon — assigned to
+    employees who are free that day. During working hours nothing is added, so
+    the normal case stays exactly as before.
+    """
+    day_zero = [
+        shift for shift in shifts if shift.starts_at.date() == SEED_START_DATE.date()
+    ]
+    in_progress = [s for s in day_zero if s.starts_at <= now <= s.ends_at]
+    starting_later = [s for s in day_zero if s.starts_at > now]
+    if in_progress and starting_later:
+        return []
+
+    # The pool is exactly the employees the rotation uses: inventing ids here
+    # would schedule a shift for somebody who does not exist.
+    pool = sorted(
+        {shift.employee_id for shift in shifts if shift.employee_id is not None}
+    )
+    assigned = {shift.employee_id for shift in day_zero if shift.employee_id is not None}
+    available = [employee for employee in pool if employee not in assigned]
+
+    date = SEED_START_DATE.date().isoformat()
+    anchors: list[Shift] = []
+    for slot, (starts, ends) in enumerate(
+        (
+            (now - timedelta(hours=1), now + timedelta(hours=6)),
+            (now + timedelta(hours=2), now + timedelta(hours=10)),
+        )
+    ):
+        if (slot == 0 and in_progress) or (slot == 1 and starting_later):
+            continue
+        if not available:
+            break
+        employee_id = available.pop(0)
+        role = employee_id.split("_", 2)[-1].rsplit("_", 1)[0] if "_" in employee_id else "floor"
+        anchors.append(
+            Shift(
+                id=f"shift_lt_{date}_{role}_anchor{slot + 1}",
+                location_id=DEMO_LOCATION_ID,
+                role=role,
+                starts_at=starts,
+                ends_at=ends,
+                employee_id=employee_id,
+                status="scheduled",
+            )
+        )
+    return anchors
+
+
+def _shifts(now: datetime | None = None) -> list[Shift]:
     shifts: list[Shift] = []
     zone = SEED_START_DATE.replace(tzinfo=UTC)
 
     def at(day_offset: int, hour: int) -> datetime:
         return zone + timedelta(days=day_offset, hours=hour)
 
+    moment = now if now is not None else datetime.now(UTC)
     for d in range(SEED_DAYS):
         weekend = (SEED_START_DATE + timedelta(days=d)).weekday() >= 5
 
@@ -184,7 +240,7 @@ def _shifts() -> list[Shift]:
         supervisor_id = f"emp_{d % 2 + 25:02d}_supervisor"
         shifts.append(_shift("supervisor", d, "main", at(d, 11), at(d, 19), supervisor_id))
 
-    return shifts
+    return shifts + _demo_anchors(shifts, moment)
 
 
 def _availability_blocks() -> list[AvailabilityBlock]:
