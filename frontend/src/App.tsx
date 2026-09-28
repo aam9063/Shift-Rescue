@@ -11,6 +11,7 @@ import { AgentDecisionsScreen } from './screens/AgentDecisionsScreen'
 import { EvalsScreen } from './screens/EvalsScreen'
 import { SimulatorScreen } from './screens/SimulatorScreen'
 import { RequireAuth } from './components/RequireAuth'
+import { ReportAbsenceDialog } from './components/ReportAbsenceDialog'
 import { getSession } from './services/auth'
 import { useLiveEvents } from './services/liveEvents'
 import { ApiError } from './services/apiClient'
@@ -59,6 +60,7 @@ function viewFromHash(): AppView | null {
 function Shell({ now, onLogout }: { now?: Date; onLogout: () => void }) {
   const [view, setView] = useState<AppView>(() => viewFromHash() ?? 'today')
   const [selectedRescueId, setSelectedRescueId] = useState<string | null>(null)
+  const [reportingAbsence, setReportingAbsence] = useState(false)
   const { approvals } = usePendingApprovals()
   const manager = getSession()?.manager
   // Live channel (spec §7.5): the screens refetch when the worker reports a
@@ -117,7 +119,15 @@ function Shell({ now, onLogout }: { now?: Date; onLogout: () => void }) {
           <TodayScreen now={now} onOpenRescue={setSelectedRescueId} />
         )}
       </main>
-      <Fab label="Report absence" />
+      {/* The manager marks an absence here (spec §7.5): the rescue opens and
+          the first wave goes out without an employee confirmation. */}
+      <Fab label="Report absence" onClick={() => setReportingAbsence(true)} />
+      {reportingAbsence ? (
+        <ReportAbsenceDialog
+          dayIso={(now ?? new Date()).toISOString().slice(0, 10)}
+          onClose={() => setReportingAbsence(false)}
+        />
+      ) : null}
     </div>
   )
 }
