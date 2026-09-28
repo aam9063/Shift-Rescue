@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Offer, RescueCase, RescueDetail, SimulatorEmployee } from '../domain/types'
@@ -263,6 +263,108 @@ describe('SimulatorScreen (spec §7.6, real data)', () => {
     await waitFor(() => {
       expect(sendSimulatorMessage).toHaveBeenCalledWith('emp_1', 'no puedo venir hoy')
     })
+  })
+
+  // --- the agent's reply surfaces without a reload (feature manager-can-act T1)
+
+  /** Drives the simulated flow under fake timers: sync fireEvent + explicit
+   * timer advances, never userEvent (its waits couple to the timers). */
+  function typeAndSend() {
+    fireEvent.change(screen.getByLabelText('Message for Ana Floor'), {
+      target: { value: 'no puedo venir hoy' },
+    })
+    fireEvent.click(screen.getByLabelText('Send message to Ana Floor'))
+    return act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+  }
+
+  function withFakeTimers() {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  }
+
+  it('surfaces the agent reply by polling the thread until it lands', async () => {
+    withFakeTimers()
+    try {
+      renderScreen()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByText('Ana Floor')).toBeInTheDocument()
+
+      await typeAndSend()
+
+      // The agent answers in 10-15 s: the frame says so and blocks duplicates.
+      expect(screen.getByText('the agent is replying…')).toBeInTheDocument()
+      expect(screen.getByLabelText('Send message to Ana Floor')).toBeDisabled()
+
+      // First poll (+3 s): no new outbound message yet, keep waiting.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000)
+      })
+      expect(screen.getByText('the agent is replying…')).toBeInTheDocument()
+
+      vi.mocked(fetchConversationThread).mockResolvedValue([
+        { from: 'assistant', text: 'Hola Ana, contame que paso' },
+        { from: 'employee', text: 'no puedo venir hoy' },
+        { from: 'assistant', text: 'Gracias, ya busco a alguien para cubrirte' },
+      ])
+      // Second poll: the reply is beyond the send-time baseline and shows up
+      // in the thread without any manual reload.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000)
+      })
+      expect(screen.getByText('Gracias, ya busco a alguien para cubrirte')).toBeInTheDocument()
+      expect(screen.queryByText('the agent is replying…')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Send message to Ana Floor')).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops waiting once the polling bound is reached', async () => {
+    withFakeTimers()
+    try {
+      renderScreen()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      await typeAndSend()
+      expect(screen.getByText('the agent is replying…')).toBeInTheDocument()
+
+      const callsAtSend = vi.mocked(fetchConversationThread).mock.calls.length
+      // ~30 s bound: 10 polls at 3 s, then the frame stops waiting honestly.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000)
+      })
+      expect(vi.mocked(fetchConversationThread).mock.calls.length).toBeLessThanOrEqual(
+        callsAtSend + 10,
+      )
+      expect(screen.queryByText('the agent is replying…')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Send message to Ana Floor')).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops polling when the screen unmounts', async () => {
+    withFakeTimers()
+    try {
+      const view = renderScreen()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      await typeAndSend()
+
+      const callsAtUnmount = vi.mocked(fetchConversationThread).mock.calls.length
+      view.unmount()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(vi.mocked(fetchConversationThread).mock.calls.length).toBe(callsAtUnmount)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('advances the demo clock through the endpoint', async () => {

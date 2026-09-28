@@ -26,6 +26,19 @@ export function useActiveRescues(): { rescues: RescueCase[] | undefined; isLoadi
   return { rescues: query.data, isLoading: query.isLoading }
 }
 
+/**
+ * Every case of the day's board, terminal included (feature manager-can-act
+ * T3): an escalated or covered case must not vanish from the board. The
+ * active-rescue counter keeps its own measure and does not read this feed.
+ */
+export function useDayRescues(): { rescues: RescueCase[] | undefined; isLoading: boolean } {
+  const query = useQuery({
+    queryKey: ['rescues', 'day'],
+    queryFn: () => dataSource.getDayRescues(),
+  })
+  return { rescues: query.data, isLoading: query.isLoading }
+}
+
 export function useRescueDetail(rescueId: string): { detail: RescueDetail | undefined; isLoading: boolean } {
   const query = useQuery({
     queryKey: ['rescues', rescueId],
@@ -58,4 +71,21 @@ export function useDecideApproval(): {
     },
   })
   return { decide: (id, decision) => mutation.mutate({ id, decision }), isPending: mutation.isPending }
+}
+
+/** Manual close from the rescue detail (spec §7.5, feature manager-can-act
+ * T2): the API answers 202 and the worker applies the transition, so the UI
+ * refetches rather than expecting the new state immediately. */
+export function useCloseRescue(): {
+  close: (rescueId: string) => void
+  isPending: boolean
+} {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (rescueId: string) => dataSource.closeRescue(rescueId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+    },
+  })
+  return { close: (rescueId) => mutation.mutate(rescueId), isPending: mutation.isPending }
 }

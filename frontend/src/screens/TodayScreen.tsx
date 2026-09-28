@@ -1,4 +1,12 @@
-import { buildTodayRows, formatCountdownParts, formatShiftTime, type TodayRow } from '../domain/today'
+import {
+  buildTodayRows,
+  countActiveRescues,
+  escalationSummary,
+  formatClockTime,
+  formatCountdownParts,
+  formatShiftTime,
+  type TodayRow,
+} from '../domain/today'
 import {
   type Shift,
   type ShiftRole,
@@ -6,7 +14,7 @@ import {
   type ShiftStatus,
 } from '../domain/types'
 import { approvalKindLabel } from '../domain/approvals'
-import { useActiveRescues, usePendingApprovals, useTodayShifts } from '../services/hooks'
+import { useDayRescues, usePendingApprovals, useTodayShifts } from '../services/hooks'
 
 const TIMEZONE = 'Europe/Madrid'
 
@@ -34,11 +42,8 @@ const stateBadge: Record<TodayRow['state'], { label: string; className: string }
   covered: { label: 'Covered', className: 'bg-green-light text-green-house' },
 }
 
-/** Honest caption per terminal row state: what happened, no spin. */
-const stateCaption: Partial<Record<TodayRow['state'], string>> = {
-  uncovered: 'No candidates offered yet.',
-  escalated: 'The manager was notified — nobody covered it in time.',
-}
+/** Honest caption for an uncovered row: what happened, no spin. */
+const uncoveredCaption = 'No candidates offered yet.'
 
 function formatLongDate(now: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
@@ -107,8 +112,19 @@ function RescueCell({
   return (
     <div className="space-y-1">
       <RescueBadge state={row.state} />
-      {row.state === 'uncovered' || row.state === 'escalated' ? (
-        <p className="text-xs tracking-tight text-text-secondary">{stateCaption[row.state]}</p>
+      {row.state === 'uncovered' ? (
+        <p className="text-xs tracking-tight text-text-secondary">{uncoveredCaption}</p>
+      ) : row.state === 'escalated' ? (
+        // Terminal case: the outcome, never a countdown (feature T4), plus
+        // the §6.4 summary of what the agent already tried (feature T3).
+        <>
+          <p className="text-xs tracking-tight text-text-secondary">
+            Escalated at {formatClockTime(row.rescue!.deadlineAt, TIMEZONE)}
+          </p>
+          <p className="text-xs tracking-tight text-text-secondary">
+            {escalationSummary(row.rescue!)}
+          </p>
+        </>
       ) : (
         <>
           {/* The countdown opens the rescue detail, like the old seeking card. */}
@@ -194,8 +210,11 @@ export interface TodayScreenProps {
 export function TodayScreen({ now = new Date(), onOpenRescue, onOpenApprovals }: TodayScreenProps) {
   const dayIso = now.toISOString().slice(0, 10)
   const { shifts, isLoading } = useTodayShifts(dayIso)
-  const { rescues } = useActiveRescues()
+  // The board reads the day's cases, terminal included; the active-rescue
+  // counter keeps its own, narrower measure (feature manager-can-act T3).
+  const { rescues } = useDayRescues()
   const { approvals } = usePendingApprovals()
+  const activeCount = countActiveRescues(rescues ?? [])
 
   const rows = buildTodayRows(shifts ?? [], rescues ?? [], approvals ?? [], RoleOrder)
 
@@ -210,7 +229,7 @@ export function TodayScreen({ now = new Date(), onOpenRescue, onOpenApprovals }:
         </div>
         <span className="flex items-center gap-2 rounded-pill border border-error bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-error">
           <span className="size-2 rounded-full bg-error" />
-          {rescues?.length ?? 0} active rescues
+          {activeCount} active rescues
         </span>
       </div>
 

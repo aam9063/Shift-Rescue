@@ -142,7 +142,7 @@ describe('TodayScreen (dashboard table per demo-readiness T3)', () => {
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     })
     client.setQueryData(['shifts', NOW.toISOString().slice(0, 10)], data.shifts)
-    client.setQueryData(['rescues', 'active'], data.rescues)
+    client.setQueryData(['rescues', 'day'], data.rescues)
     client.setQueryData(['approvals', 'pending'], data.approvals ?? [])
     return render(
       <QueryClientProvider client={client}>
@@ -161,6 +161,29 @@ describe('TodayScreen (dashboard table per demo-readiness T3)', () => {
     expect(
       within(row).getByText('The manager was notified — nobody covered it in time.'),
     ).toBeInTheDocument()
+  })
+
+  it('shows the escalation outcome and the contacted summary instead of a countdown', async () => {
+    // Real payload of the verified defect: an escalated case whose offers
+    // carry what each candidate answered (feature manager-can-act T3/T4).
+    const escalatedWithOffers: RescueCase = {
+      ...escalatedRescue,
+      offerPreviews: [
+        { employeeName: 'Marta L.', status: 'pending' },
+        { employeeName: 'Ivan R.', status: 'declined' },
+      ],
+    }
+    renderWithBoardData({ shifts: [escalatedShift], rescues: [escalatedWithOffers] })
+    const table = await screen.findByTestId('today-table')
+    const row = within(table).getByText('Iker M. (absent)').closest('tr')!
+
+    expect(within(row).getByText('Escalated')).toBeInTheDocument()
+    // The outcome, never "00:00 minutes left".
+    expect(within(row).getByText('Escalated at 14:30')).toBeInTheDocument()
+    expect(within(row).queryByText(/minutes left/)).not.toBeInTheDocument()
+    // §6.4 summary: who was contacted and what each answered.
+    expect(within(row).getByText('Contacted: Marta L. (no reply yet), Ivan R. (declined).')).toBeInTheDocument()
+    expect(within(row).queryByText('Uncovered')).not.toBeInTheDocument()
   })
 
   it('offers View detail for a terminal (escalated) case so it can be inspected', async () => {

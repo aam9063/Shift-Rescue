@@ -198,6 +198,36 @@ describe('ApiDashboardDataSource', () => {
     expect(rescues[0].offerPreviews).toEqual([{ employeeName: 'Marta L.', status: 'pending' }])
   })
 
+  it('getDayRescues returns every case, terminal included (feature manager-can-act T3)', async () => {
+    stubFetchSequence([
+      { body: LOCATIONS },
+      {
+        body: [
+          RESCUE_WIRE,
+          { ...RESCUE_WIRE, id: 'rescue_done', status: 'COVERED' },
+        ],
+      },
+    ])
+
+    const rescues = await new ApiDashboardDataSource().getDayRescues()
+
+    expect(rescues.map((rescue) => rescue.id)).toEqual(['rescue_001', 'rescue_done'])
+  })
+
+  it('closeRescue POSTs to the close endpoint and accepts the 202 queued body', async () => {
+    const fetchMock = stubFetchSequence([
+      { body: { status: 'queued', id: 'rescue_001' }, status: 202 },
+    ])
+
+    await expect(
+      new ApiDashboardDataSource().closeRescue('rescue_001'),
+    ).resolves.toBeUndefined()
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/rescues/rescue_001/close')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' })
+  })
+
   it('getRescueDetail maps rescue, shift, timeline, candidates and offers', async () => {
     const fetchMock = stubFetchSequence([{ body: DETAIL_WIRE }])
 

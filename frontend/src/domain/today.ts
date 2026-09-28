@@ -1,4 +1,4 @@
-import type { ApprovalRequest, RescueCase, Shift, ShiftRole } from './types'
+import type { ApprovalRequest, OfferPreviewStatus, RescueCase, RescueStatus, Shift, ShiftRole } from './types'
 
 /**
  * Pure helpers for the Today screen. No React, no I/O, no `Date.now()` —
@@ -60,6 +60,53 @@ export function formatCountdownParts(isoDeadline: string, now: Date): CountdownP
   return { text: `${days}d ${hours % 24}h`, caption: 'days left' }
 }
 
+/** HH:MM in the location timezone (terminal-case outcomes, e.g. "Escalated at 14:30"). */
+export function formatClockTime(iso: string, timeZone: string): string {
+  return formatTime(iso, timeZone)
+}
+
+// --- Active-rescue counter (a different measure from the board's data) -------
+
+/**
+ * Statuses the "active rescues" counter has always counted. The board now
+ * receives the day's terminal cases too (feature manager-can-act T3), but the
+ * counter keeps its own measure — do not widen it to match the feed.
+ */
+export const ACTIVE_RESCUE_STATUSES: ReadonlySet<RescueStatus> = new Set<RescueStatus>([
+  'OPEN',
+  'OFFERING',
+  'AWAITING_APPROVAL',
+  'ESCALATED',
+])
+
+export function countActiveRescues(rescues: RescueCase[]): number {
+  return rescues.filter((rescue) => ACTIVE_RESCUE_STATUSES.has(rescue.status)).length
+}
+
+// --- Escalation summary (spec §6.4) ------------------------------------------
+
+/** What each contacted candidate answered, in the board's compact vocabulary. */
+const OFFER_PREVIEW_REPLY: Record<OfferPreviewStatus, string> = {
+  pending: 'no reply yet',
+  declined: 'declined',
+  accepted: 'accepted',
+}
+
+/**
+ * Spec §6.4: who was contacted and what each answered — no health details,
+ * ever. Built only from what the case payload already carries.
+ */
+export function escalationSummary(rescue: RescueCase): string {
+  const previews = rescue.offerPreviews ?? []
+  if (previews.length === 0) {
+    return 'The manager was notified — nobody covered it in time.'
+  }
+  const contacted = previews
+    .map((preview) => `${preview.employeeName} (${OFFER_PREVIEW_REPLY[preview.status]})`)
+    .join(', ')
+  return `Contacted: ${contacted}.`
+}
+
 // --- Today rows (one per shift; the former kanban grouping, per row) ---------
 
 /**
@@ -109,10 +156,16 @@ function rowState(shift: Shift, rescue: RescueCase | undefined): TodayRowState {
         return staffed ? 'covered' : 'escalated'
       case 'OFFERING':
         return 'searching'
+      case 'COVERED':
+        // A covered case means someone took the shift (terminal outcome),
+        // even if the HRIS status has not caught up yet.
+        return 'covered'
       default:
         // An OPEN case (absence reported, not yet confirmed) has no offers to
         // show, so the rescue cell keeps the honest "nothing tried" caption —
-        // but a case exists, so the Actions column offers the detail.
+        // but a case exists, so the Actions column offers the detail. A
+        // manager-closed case (CLOSED_BY_MANAGER) reads like the shift does:
+        // covered when staffed, otherwise the shift still needs someone.
         return staffed ? 'covered' : 'uncovered'
     }
   }

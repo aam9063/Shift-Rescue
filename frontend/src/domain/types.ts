@@ -24,7 +24,13 @@ export interface Shift {
   status: ShiftStatus
 }
 
-export type RescueStatus = 'OPEN' | 'OFFERING' | 'AWAITING_APPROVAL' | 'COVERED' | 'ESCALATED'
+export type RescueStatus =
+  | 'OPEN'
+  | 'OFFERING'
+  | 'AWAITING_APPROVAL'
+  | 'COVERED'
+  | 'ESCALATED'
+  | 'CLOSED_BY_MANAGER'
 
 export type OfferPreviewStatus = 'pending' | 'declined' | 'accepted'
 

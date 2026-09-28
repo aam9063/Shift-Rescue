@@ -249,7 +249,10 @@ and those do follow the demo clock; the Simulator screen says so in one line.
    shows a banner at the top when nobody can act.
 3. **Walk one rescue end to end**: send an absence message from an *on shift
    now* frame, watch the Today table open the rescue, and use `+10 min` to
-   escalate. Finish by resetting the clock again.
+   escalate. Then do what the manager does: open the escalated case's detail,
+   resolve it outside the system, and press **Close case** (confirm) so the
+   board reads the truth — the full tour is `docs/demo-script.md`. Finish by
+   resetting the clock again.
 
 The offset is shown next to the clock in human terms (`+2 h 30 m ahead`) and,
 while non-zero, explained in one line on the screen — nobody should have to

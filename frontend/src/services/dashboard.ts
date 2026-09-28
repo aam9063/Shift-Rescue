@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   AGENT_DECISIONS,
@@ -43,6 +43,12 @@ import type { SimulatorEmployee } from '../domain/types'
  */
 
 const LIVE_STALE_TIME_MS = 30_000
+
+// --- Agent reply poll (feature manager-can-act T1) ---------------------------
+
+const REPLY_POLL_INTERVAL_MS = 3_000
+/** 10 attempts x 3 s: the agent answers in 10-15 s; never poll forever. */
+const REPLY_POLL_MAX_ATTEMPTS = 10
 
 export function useConversations(): { conversations: Conversation[] } {
   const query = useQuery({
@@ -237,9 +243,76 @@ export function useDemoClock(): {
 export function useSendDemoMessage(): {
   send: (employeeId: string, conversationId: string | null, text: string) => void
   isPending: boolean
+  /** Conversation whose agent reply is being polled; drives the
+   * "the agent is replying…" line and the disabled send control. */
+  replyingTo: string | null
 } {
   const queryClient = useQueryClient()
   const mockMode = isMockMode()
+  const [replyingTo, setReplyingTo] = useState<string | null>(null)
+  const pollRef = useRef<{ cancelled: boolean; timer?: ReturnType<typeof setTimeout> } | null>(null)
+
+  useEffect(() => {
+    // Unmount: stop the reply poll — it must never setState afterwards.
+    return () => {
+      const poll = pollRef.current
+      if (poll !== null) {
+        poll.cancelled = true
+        if (poll.timer !== undefined) {
+          clearTimeout(poll.timer)
+        }
+        pollRef.current = null
+      }
+    }
+  }, [])
+
+  const startReplyPoll = (conversationId: string) => {
+    // Baseline: the outbound messages the thread already had when the
+    // employee sent. The reply is any assistant message beyond it.
+    const baseline = (queryClient.getQueryData<ChatMessage[]>(['demo-thread', conversationId]) ?? [])
+      .filter((message) => message.from === 'assistant').length
+    const poll: { cancelled: boolean; timer?: ReturnType<typeof setTimeout> } = { cancelled: false }
+    pollRef.current = poll
+    setReplyingTo(conversationId)
+    let attempts = 0
+    const stop = () => {
+      poll.cancelled = true
+      pollRef.current = null
+      setReplyingTo(null)
+    }
+    const tick = async () => {
+      if (poll.cancelled) {
+        return
+      }
+      try {
+        const messages = await fetchConversationThread(conversationId)
+        if (messages.filter((message) => message.from === 'assistant').length > baseline) {
+          // The agent replied: surface it and refresh every board it moves.
+          void queryClient.invalidateQueries({ queryKey: ['demo-thread', conversationId] })
+          void queryClient.invalidateQueries({ queryKey: ['demo-employees'] })
+          void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+          void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+          stop()
+          return
+        }
+      } catch {
+        // Transient fetch failure: keep polling until the bound.
+      }
+      attempts += 1
+      if (attempts >= REPLY_POLL_MAX_ATTEMPTS) {
+        stop() // bound reached: stop waiting, the thread refetches on visit
+        return
+      }
+      poll.timer = setTimeout(() => {
+        void tick()
+      }, REPLY_POLL_INTERVAL_MS)
+    }
+    poll.timer = setTimeout(() => {
+      void tick()
+    }, REPLY_POLL_INTERVAL_MS)
+  }
+
   const mutation = useMutation({
     mutationFn: ({
       employeeId,
@@ -256,6 +329,9 @@ export function useSendDemoMessage(): {
         void queryClient.invalidateQueries({
           queryKey: ['demo-thread', variables.conversationId],
         })
+        // The agent's answer takes 10-15 s: poll until it lands so the reply
+        // shows up without a manual reload (feature manager-can-act T1).
+        startReplyPoll(variables.conversationId)
       }
       void queryClient.invalidateQueries({ queryKey: ['demo-employees'] })
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
@@ -274,7 +350,7 @@ export function useSendDemoMessage(): {
     }
     mutation.mutate({ employeeId, conversationId, text })
   }
-  return { send, isPending: mutation.isPending }
+  return { send, isPending: mutation.isPending, replyingTo }
 }
 
 /** The demo clock is UTC; show HH:MM without a timezone debate. */

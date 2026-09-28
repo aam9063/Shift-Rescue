@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalRequest, RescueCase, Shift } from './types'
 import {
+  ACTIVE_RESCUE_STATUSES,
   buildTodayRows,
+  countActiveRescues,
+  escalationSummary,
+  formatClockTime,
   formatCountdownParts,
   formatShiftTime,
   formatCountdown,
@@ -82,6 +86,55 @@ describe('formatCountdownParts (adaptive units)', () => {
       text: '00:00',
       caption: 'minutes left',
     })
+  })
+})
+
+describe('formatClockTime', () => {
+  it('renders the HH:MM of a timestamp in the location timezone', () => {
+    expect(formatClockTime('2026-10-03T14:30:00+02:00', TZ)).toBe('14:30')
+  })
+})
+
+describe('countActiveRescues (a different measure from the board feed)', () => {
+  it('counts the statuses the active-rescue counter has always counted', () => {
+    const cases: RescueCase[] = [
+      { id: 'a', shiftId: 's', absentEmployeeName: 'X', status: 'OFFERING', deadlineAt: '2026-10-03T15:00:00+02:00' },
+      { id: 'b', shiftId: 's', absentEmployeeName: 'X', status: 'ESCALATED', deadlineAt: '2026-10-03T15:00:00+02:00' },
+      { id: 'c', shiftId: 's', absentEmployeeName: 'X', status: 'COVERED', deadlineAt: '2026-10-03T15:00:00+02:00' },
+      { id: 'd', shiftId: 's', absentEmployeeName: 'X', status: 'CLOSED_BY_MANAGER', deadlineAt: '2026-10-03T15:00:00+02:00' },
+    ]
+    expect(countActiveRescues(cases)).toBe(2)
+    // The terminal cases ride the same feed as the live ones (feature T3).
+    expect(ACTIVE_RESCUE_STATUSES.has('COVERED')).toBe(false)
+  })
+})
+
+describe('escalationSummary (spec §6.4, feature manager-can-act T3)', () => {
+  const escalated: RescueCase = {
+    id: 'r',
+    shiftId: 's',
+    absentEmployeeName: 'Iker M.',
+    status: 'ESCALATED',
+    deadlineAt: '2026-10-03T15:00:00+02:00',
+  }
+
+  it('says what happened when nobody was contacted', () => {
+    expect(escalationSummary(escalated)).toBe(
+      'The manager was notified — nobody covered it in time.',
+    )
+  })
+
+  it('lists who was contacted and what each answered', () => {
+    expect(
+      escalationSummary({
+        ...escalated,
+        offerPreviews: [
+          { employeeName: 'Marta L.', status: 'pending' },
+          { employeeName: 'Ivan R.', status: 'declined' },
+          { employeeName: 'Sonia P.', status: 'accepted' },
+        ],
+      }),
+    ).toBe('Contacted: Marta L. (no reply yet), Ivan R. (declined), Sonia P. (accepted).')
   })
 })
 
@@ -201,5 +254,17 @@ describe('buildTodayRows', () => {
     const rows = buildTodayRows([absentShift], [openCase], [], RoleOrder)
     expect(rows[0].state).toBe('uncovered')
     expect(rows[0].rescue).toEqual(openCase)
+  })
+
+  it('reads a covered case as covered even when the HRIS status lags (terminal feed, feature T3)', () => {
+    const coveredCase: RescueCase = { ...seeking, status: 'COVERED' }
+    const rows = buildTodayRows([absentShift], [coveredCase], [], RoleOrder)
+    expect(rows[0].state).toBe('covered')
+  })
+
+  it('reads a manager-closed case on an unstaffed shift as uncovered (the shift still needs someone)', () => {
+    const closedCase: RescueCase = { ...seeking, status: 'CLOSED_BY_MANAGER' }
+    const rows = buildTodayRows([absentShift], [closedCase], [], RoleOrder)
+    expect(rows[0].state).toBe('uncovered')
   })
 })

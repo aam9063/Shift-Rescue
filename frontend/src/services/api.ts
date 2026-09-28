@@ -15,6 +15,7 @@ import type {
   SystemStatus,
 } from './dashboardMock'
 import { ApiError, apiFetch } from './apiClient'
+import { ACTIVE_RESCUE_STATUSES } from '../domain/today'
 import type { DashboardDataSource } from './mock'
 
 /**
@@ -84,9 +85,6 @@ interface MutationAcceptedWire {
   id: string
 }
 
-/** Rescue statuses the kanban and Ops treat as "active". */
-const ACTIVE_RESCUE_STATUSES = new Set(['OPEN', 'OFFERING', 'AWAITING_APPROVAL', 'ESCALATED'])
-
 /** Product latency target shown as the Ops caption; not served by the API. */
 const LATENCY_TARGET_MS = 2500
 /** Above this low-confidence rate the Ops screen raises a warning alert. */
@@ -131,6 +129,10 @@ export class ApiDashboardDataSource implements DashboardDataSource {
     return fetchActiveRescues()
   }
 
+  async getDayRescues(): Promise<RescueCase[]> {
+    return fetchRescues()
+  }
+
   async getRescueDetail(rescueId: string): Promise<RescueDetail> {
     return fetchRescueDetail(rescueId)
   }
@@ -153,6 +155,15 @@ export class ApiDashboardDataSource implements DashboardDataSource {
     await apiFetch<MutationAcceptedWire>(`/api/approvals/${encodeURIComponent(id)}/${action}`, {
       method: 'POST',
     })
+  }
+
+  async closeRescue(rescueId: string): Promise<void> {
+    // The close is enqueued by the API (202) and applied by the worker, so
+    // the new state appears after the queries are invalidated and refetched.
+    await apiFetch<MutationAcceptedWire>(
+      `/api/rescues/${encodeURIComponent(rescueId)}/close`,
+      { method: 'POST' },
+    )
   }
 }
 
@@ -261,6 +272,13 @@ export async function fetchActiveRescues(): Promise<RescueCase[]> {
   const locationId = await getLocationId()
   const rescues = await apiFetch<RescueCase[]>(`/api/rescues?location_id=${locationId}`)
   return rescues.filter((rescue) => ACTIVE_RESCUE_STATUSES.has(rescue.status))
+}
+
+/** Every case of the location, terminal included: the Today board needs the
+ * day's escalated and covered cases to read the truth (feature T3). */
+export async function fetchRescues(): Promise<RescueCase[]> {
+  const locationId = await getLocationId()
+  return apiFetch<RescueCase[]>(`/api/rescues?location_id=${locationId}`)
 }
 
 /** Full rescue detail: offers carry the employee ids the scenario needs. */

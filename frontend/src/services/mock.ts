@@ -7,6 +7,8 @@ import type { ApprovalRequest, ApprovalStatus, RescueCase, RescueDetail, Shift }
 export interface DashboardDataSource {
   getShifts(dayIso: string): Promise<Shift[]>
   getActiveRescues(): Promise<RescueCase[]>
+  /** Every case of the day's board, terminal included (feature manager-can-act T3). */
+  getDayRescues(): Promise<RescueCase[]>
   getRescueDetail(rescueId: string): Promise<RescueDetail>
   getPendingApprovals(): Promise<ApprovalRequest[]>
   decideApproval(
@@ -14,6 +16,8 @@ export interface DashboardDataSource {
     decision: Exclude<ApprovalStatus, 'pending' | 'expired'>,
     decidedBy: string,
   ): Promise<void>
+  /** Manual close (spec §7.5): enqueued, answers 202; the worker applies it. */
+  closeRescue(rescueId: string): Promise<void>
 }
 
 const LOCATION_ID = 'la-terraza-del-puerto'
@@ -126,6 +130,10 @@ export class MockDashboardDataSource implements DashboardDataSource {
     return mockRescues
   }
 
+  async getDayRescues(): Promise<RescueCase[]> {
+    return mockRescues
+  }
+
   async getRescueDetail(rescueId: string): Promise<RescueDetail> {
     const rescue = mockRescues.find((r) => r.id === rescueId)
     if (!rescue) {
@@ -160,5 +168,16 @@ export class MockDashboardDataSource implements DashboardDataSource {
     approval.status = decision
     approval.decidedBy = decidedBy
     approval.decidedAt = '2026-10-03T06:46:00+02:00'
+  }
+
+  async closeRescue(rescueId: string): Promise<void> {
+    const rescue = mockRescues.find((r) => r.id === rescueId)
+    if (!rescue) {
+      throw new Error(`Unknown rescue: ${rescueId}`)
+    }
+    // Same terminal state the worker's manual close produces (spec §7.5).
+    if (rescue.status !== 'COVERED') {
+      rescue.status = 'CLOSED_BY_MANAGER'
+    }
   }
 }

@@ -104,13 +104,14 @@ function EmployeePhone({
   situation: EmployeeSituation
 }) {
   const { messages } = useDemoThread(employee.conversationId)
-  const { send } = useSendDemoMessage()
+  const { send, isPending, replyingTo } = useSendDemoMessage()
   const [draft, setDraft] = useState('')
+  const waitingForReply = replyingTo !== null && replyingTo === employee.conversationId
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const text = draft.trim()
-    if (!text) {
+    if (!text || isPending || waitingForReply) {
       return
     }
     send(employee.id, employee.conversationId, text)
@@ -159,6 +160,11 @@ function EmployeePhone({
           </div>
         ))}
       </div>
+      {waitingForReply && (
+        <p role="status" className="px-3 pb-1 text-xs tracking-tight text-text-secondary">
+          the agent is replying…
+        </p>
+      )}
       <form
         className="flex items-center gap-2 border-t border-black/10 p-3"
         onSubmit={submit}
@@ -173,7 +179,8 @@ function EmployeePhone({
         <button
           type="submit"
           aria-label={`Send message to ${employee.displayName}`}
-          className="pointer-coarse:size-11 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95"
+          disabled={isPending || waitingForReply}
+          className="pointer-coarse:size-11 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-green-accent text-white transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <svg viewBox="0 0 16 16" className="size-4 fill-white" aria-hidden="true">
             <path d="M1 8 15 1 9.5 15 7.8 9.2 1 8Z" />
