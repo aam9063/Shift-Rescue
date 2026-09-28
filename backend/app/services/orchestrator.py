@@ -41,6 +41,7 @@ from app.domain.parser import Intent, parse_message
 from app.domain.quiet_hours import next_quiet_end, offers_allowed
 from app.domain.ranking import RankedCandidate, rank_candidates
 from app.domain.state_machine import SideEffect, State, StateMachineEvent, transition
+from app.events import DashboardEvent, EventBus, EventName, NoopEventBus
 from app.integrations.workforce.mock import MockWorkforceAdapter
 from app.observability.redaction import mask_phone, redact_if_health
 from app.ports import Channel, Scheduler
@@ -76,6 +77,7 @@ class RescueOrchestrator:
         clock: Clock,
         config: OrchestratorConfig | None = None,
         interpreter: MessageInterpreter | None = None,
+        events: EventBus | None = None,
     ) -> None:
         self._sessions = session_factory
         self._workforce = workforce
@@ -84,6 +86,76 @@ class RescueOrchestrator:
         self._clock = clock
         self._config = config or OrchestratorConfig()
         self.interpreter = interpreter
+        # Live-channel port (spec §7.5): optional, no-op by default; a Redis
+        # outage never reaches the domain (the bus itself is best effort).
+        self._events = events if events is not None else NoopEventBus()
+
+    # --- live events (spec §7.5, §7.6) ---------------------------------------
+
+    async def _emit(
+        self,
+        name: EventName,
+        *,
+        location_id: str | None,
+        rescue_id: str | None = None,
+        shift_id: str | None = None,
+        origin: str = "system",
+    ) -> None:
+        """Publish one dashboard event, best effort (spec §9.3).
+
+        Called right after the commit that produced the change, so a client
+        refetching on the event sees the new state. The payload carries ids
+        only — never a body, phone, name or health detail (spec §10) — and
+        a bus failure is logged and swallowed: the worker never fails
+        because the broker is down.
+        """
+        if location_id is None:
+            return
+        try:
+            await self._events.publish(
+                DashboardEvent(
+                    name=name,
+                    location_id=location_id,
+                    rescue_id=rescue_id,
+                    shift_id=shift_id,
+                    origin=origin,
+                    at=_utc(self._clock.now()).isoformat(),
+                )
+            )
+        except Exception as error:  # the rescue path never depends on the bus
+            structlog.get_logger(__name__).warning(
+                "dashboard_event_publish_failed",
+                name=name.value,
+                error=str(error)[:200],
+            )
+
+    async def _emit_message_sent(
+        self,
+        conversation_id: str | None,
+        employee_id: str | None,
+        rescue_id: str | None,
+    ) -> None:
+        """MESSAGE_SENT for the employee conversation just persisted."""
+        location_id: str | None = None
+        if employee_id is not None:
+            location_id = await self._location_of(employee_id)
+        elif conversation_id is not None:
+            async with self._sessions() as session:
+                row = (
+                    await session.execute(
+                        select(Conversation.employee_id).where(
+                            Conversation.id == conversation_id
+                        )
+                    )
+                ).scalar_one_or_none()
+            if row is not None:
+                location_id = await self._location_of(row)
+        await self._emit(
+            EventName.MESSAGE_SENT,
+            location_id=location_id,
+            rescue_id=rescue_id,
+            origin="agent",
+        )
 
     # --- inbound -------------------------------------------------------------
 
@@ -100,6 +172,12 @@ class RescueOrchestrator:
         )
         if message_id is None:
             return  # duplicate provider message: processed once (spec §7.4)
+
+        await self._emit(
+            EventName.MESSAGE_RECEIVED,
+            location_id=await self._location_of(employee_id),
+            origin=f"employee:{employee_id}",
+        )
 
         # Spec §9.3: a paused agent does nothing — the manager takes over.
         if await self._agent_is_paused(employee_id):
@@ -307,6 +385,13 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+            await self._emit(
+                EventName.APPROVAL_REQUESTED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"employee:{employee_id}",
+            )
             self._scheduler.schedule(
                 _aware(case.deadline_at), "approval_timeout", {"case_id": case.id}
             )
@@ -584,6 +669,14 @@ class RescueOrchestrator:
         # forever (spec §5.5; the transition is OPEN + DEADLINE_REACHED).
         self._scheduler.schedule(_aware(deadline), "rescue_deadline", {"case_id": case_id})
 
+        await self._emit(
+            EventName.RESCUE_OPENED,
+            location_id=target.location_id,
+            rescue_id=case_id,
+            shift_id=target.id,
+            origin=f"employee:{employee_id}",
+        )
+
         await self._send_template(
             to=self._phone_of(employee),
             template_key="absence_confirm",
@@ -699,6 +792,12 @@ class RescueOrchestrator:
                 if queued is None:
                     await self._escalate(session, case, StateMachineEvent.WAVES_EXHAUSTED)
                     await session.commit()
+                    await self._emit(
+                        EventName.CASE_ESCALATED,
+                        location_id=case.location_id,
+                        rescue_id=case.id,
+                        shift_id=case.shift_id,
+                    )
                     manager = await self._manager_for(case.location_id)
                     if manager is not None and manager.get("phone_e164"):
                         await self._send_template(
@@ -725,6 +824,13 @@ class RescueOrchestrator:
             # Persist the whole OPEN -> OFFERING transition before effects land.
             await session.commit()
 
+        if offered_count > 0:
+            await self._emit(
+                EventName.OFFERS_SENT,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+            )
         self._schedule_wave_tasks(case, now)
 
     # --- candidates and first wave --------------------------------------------
@@ -1027,6 +1133,13 @@ class RescueOrchestrator:
                     )
                 )
                 await session.commit()
+                await self._emit(
+                    EventName.APPROVAL_REQUESTED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                    origin=f"employee:{employee_id}",
+                )
                 manager = await self._manager_for(case.location_id)
                 if manager is not None and manager.get("phone_e164"):
                     await self._send_template(
@@ -1117,6 +1230,13 @@ class RescueOrchestrator:
                 manager = await self._manager_for(case.location_id)
                 location_name, location_tz = await self._location_info(case.location_id)
                 await session.commit()
+                await self._emit(
+                    EventName.APPROVAL_REQUESTED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                    origin=f"employee:{employee_id}",
+                )
                 # Manager must decide before the rescue deadline (§4.2).
                 self._scheduler.schedule(
                     _aware(case.deadline_at), "approval_timeout", {"case_id": case.id}
@@ -1151,6 +1271,20 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+            await self._emit(
+                EventName.OFFER_ACCEPTED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"employee:{employee_id}",
+            )
+            await self._emit(
+                EventName.CASE_COVERED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"employee:{employee_id}",
+            )
 
         # Effects after commit (spec §4.2). HRIS failures retry 3 times,
         # then the rescue escalates with a technical reason (spec §5.5).
@@ -1186,6 +1320,12 @@ class RescueOrchestrator:
                     )
                 )
                 await session.commit()
+                await self._emit(
+                    EventName.CASE_ESCALATED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
             manager = await self._manager_for(case.location_id)
             location_name, location_tz = await self._location_info(case.location_id)
             if manager is not None and manager.get("phone_e164"):
@@ -1304,6 +1444,12 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+            await self._emit(
+                EventName.OFFER_DECLINED,
+                location_id=await self._location_of(employee_id),
+                rescue_id=offer.rescue_id,
+                origin=f"employee:{employee_id}",
+            )
             return True
 
     async def _try_withdraw(self, employee_id: str) -> bool:
@@ -1368,6 +1514,12 @@ class RescueOrchestrator:
             if not next_candidates:
                 await self._escalate(session, case, StateMachineEvent.WAVES_EXHAUSTED)
                 await session.commit()
+                await self._emit(
+                    EventName.CASE_ESCALATED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
                 await self._notify_escalation(case)
                 return
 
@@ -1389,6 +1541,13 @@ class RescueOrchestrator:
                 now=now,
             )
             await session.commit()
+            if sent:
+                await self._emit(
+                    EventName.OFFERS_SENT,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
         if sent:
             self._scheduler.schedule(
                 now + timedelta(minutes=self._config.wave_interval_minutes),
@@ -1430,6 +1589,13 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+            await self._emit(
+                EventName.APPROVAL_REQUESTED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"employee:{employee_id}",
+            )
 
         manager = await self._manager_for(case.location_id)
         if manager is not None and manager.get("phone_e164"):
@@ -1482,6 +1648,13 @@ class RescueOrchestrator:
                 )
                 case.status = result.new_state.value
                 await session.commit()
+                await self._emit(
+                    EventName.APPROVAL_DECIDED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                    origin=f"manager:{decided_by}",
+                )
                 return
 
             if approval.kind == "cancel_rescue":
@@ -1503,6 +1676,20 @@ class RescueOrchestrator:
                     )
                 )
                 await session.commit()
+                await self._emit(
+                    EventName.APPROVAL_DECIDED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                    origin=f"manager:{decided_by}",
+                )
+                await self._emit(
+                    EventName.CASE_CLOSED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                    origin=f"manager:{decided_by}",
+                )
                 return
 
             if approval.kind == "partial_coverage":
@@ -1534,6 +1721,20 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+            await self._emit(
+                EventName.APPROVAL_DECIDED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"manager:{decided_by}",
+            )
+            await self._emit(
+                EventName.CASE_COVERED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"manager:{decided_by}",
+            )
 
         # Effects after commit.
         if offer is not None and offer.employee_id:
@@ -1606,6 +1807,13 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+            await self._emit(
+                EventName.CASE_CLOSED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+                origin=f"manager:{decided_by}",
+            )
 
     async def _supersede_offers(self, session: AsyncSession, rescue_id: str) -> None:
         pending = (
@@ -1651,6 +1859,12 @@ class RescueOrchestrator:
             if _aware(case.deadline_at) <= now:
                 await self._escalate(session, case, StateMachineEvent.DEADLINE_REACHED)
                 await session.commit()
+                await self._emit(
+                    EventName.CASE_ESCALATED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
                 await self._notify_escalation(case)
                 return
 
@@ -1668,6 +1882,12 @@ class RescueOrchestrator:
             if not next_candidates:
                 await self._escalate(session, case, StateMachineEvent.WAVES_EXHAUSTED)
                 await session.commit()
+                await self._emit(
+                    EventName.CASE_ESCALATED,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
                 await self._notify_escalation(case)
                 return
 
@@ -1678,7 +1898,7 @@ class RescueOrchestrator:
             ).scalars().all()
             next_wave = max(last_wave) + 1
             location_name, location_tz = await self._location_info(case.location_id)
-            await self._send_wave_offers(
+            sent = await self._send_wave_offers(
                 session,
                 case,
                 shift,
@@ -1689,6 +1909,13 @@ class RescueOrchestrator:
                 now=now,
             )
             await session.commit()
+            if sent:
+                await self._emit(
+                    EventName.OFFERS_SENT,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
             self._schedule_wave_tasks(case, now)
 
     async def _on_deadline(self, payload: dict[str, Any]) -> None:
@@ -1708,6 +1935,12 @@ class RescueOrchestrator:
                 return
             await self._escalate(session, case, StateMachineEvent.DEADLINE_REACHED)
             await session.commit()
+            await self._emit(
+                EventName.CASE_ESCALATED,
+                location_id=case.location_id,
+                rescue_id=case.id,
+                shift_id=case.shift_id,
+            )
             await self._notify_escalation(case)
 
     async def _on_approval_timeout(self, payload: dict[str, Any]) -> None:
@@ -1765,7 +1998,7 @@ class RescueOrchestrator:
                 return
             ranked = await self._compute_candidates(case.location_id, shift, now)
             location_name, location_tz = await self._location_info(case.location_id)
-            await self._send_wave_offers(
+            sent = await self._send_wave_offers(
                 session,
                 case,
                 shift,
@@ -1776,6 +2009,13 @@ class RescueOrchestrator:
                 now=now,
             )
             await session.commit()
+            if sent:
+                await self._emit(
+                    EventName.OFFERS_SENT,
+                    location_id=case.location_id,
+                    rescue_id=case.id,
+                    shift_id=case.shift_id,
+                )
 
     async def _escalate(
         self, session: AsyncSession, case: RescueCase, event: StateMachineEvent
@@ -2120,6 +2360,7 @@ class RescueOrchestrator:
                 )
             )
             await session.commit()
+        await self._emit_message_sent(conversation_id, employee_id, rescue_id)
 
     async def _send_out_of_scope(self, conversation_id: str, employee_id: str) -> None:
         employee = await self._employee(employee_id)

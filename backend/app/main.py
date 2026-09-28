@@ -20,6 +20,7 @@ from app.api.metrics import router as metrics_router
 from app.api.rescues import router as rescues_router
 from app.api.status import router as status_router
 from app.api.webhooks_twilio import router as twilio_router
+from app.api.ws import router as ws_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.observability.tracing import configure_tracing, shutdown_tracing
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     app.include_router(health_router)
+    app.include_router(ws_router)
     app.include_router(twilio_router)
     app.include_router(status_router)
     app.include_router(auth_router)
