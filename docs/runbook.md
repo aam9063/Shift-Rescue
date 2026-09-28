@@ -218,7 +218,10 @@ WhatsApp phone:
 3. Use the demo clock to skip waiting: `+10 min` / `+1h` call
    `POST /dev/clock/advance`, which moves a Redis-backed offset shared by the
    API and the worker (`DemoClock`) and immediately enqueues the reconcile
-   sweep, so overdue cases escalate in seconds. **Reset** calls
+   sweep, so overdue cases escalate in seconds. The total offset is clamped
+   to a documented demo bound of **±6 hours**: a request that would go past
+   it is cut at the bound, the endpoint answers `clamped: true` and the
+   Simulator says the clock stopped there. **Reset** calls
    `POST /dev/clock/reset`, which zeroes the offset and runs the sweep again —
    one click undoes any advance.
 
@@ -237,7 +240,9 @@ and those do follow the demo clock; the Simulator screen says so in one line.
 1. **Reset the demo clock.** A leftover advance persists in Redis and silently
    moves "now" for the whole worker: today's shifts read as already finished,
    the agent answers "out of scope", and database timestamps jump into the
-   future. Open the Simulator and press **Reset clock** (or
+   future. The clock **must read `on real time` before a demo** — the bound is
+   ±6 h, but even a smaller offset displaces the screens. Open the Simulator
+   and press **Reset clock** (or
    `curl -X POST .../dev/clock/reset` with a manager token) until it reads
    `on real time`.
 2. **Confirm at least one employee is on shift now.** The Simulator marks each

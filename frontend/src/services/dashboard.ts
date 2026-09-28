@@ -176,6 +176,8 @@ export function useDemoThread(conversationId: string | null): { messages: ChatMe
 export function useDemoClock(): {
   time: string | undefined
   offsetSeconds: number | undefined
+  /** True when the last advance was cut at the backend's ±6 h demo bound. */
+  clamped: boolean
   /** Virtual "now" as a Date, for computing roster situations. */
   virtualNow: Date | undefined
   advance: (seconds: number) => void
@@ -234,6 +236,7 @@ export function useDemoClock(): {
   return {
     time: mockMode ? mockTime : (query.data ? formatVirtualTime(query.data.now) : undefined),
     offsetSeconds: mockMode ? 0 : query.data?.offsetSeconds,
+    clamped: mockMode ? false : (query.data?.clamped ?? false),
     virtualNow: query.data ? new Date(query.data.now) : undefined,
     advance,
     reset,
@@ -385,6 +388,7 @@ export function useDemoDataReset(): {
       queryClient.setQueryData(['demo-clock'], {
         now: summary.now,
         offsetSeconds: summary.offsetSeconds,
+        clamped: false,
       })
       // Everything the reset touches: the board, the roster, the threads,
       // the scenario and the clock all refetch from the reseeded state.

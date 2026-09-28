@@ -37,7 +37,8 @@ with). All data is demo data at "La Terraza del Puerto".
    clock back on real time. Do this before anything else: leftovers from
    previous runs are the main source of demo confusion — threads answering
    about shifts that already closed, an old `[template: offer]` placeholder,
-   a clock left hours ahead.
+   a clock left hours ahead (advances are clamped at ±6 h, but any offset
+   displaces the screens).
 4. Open **Simulator**. Each frame is labelled with the employee's situation
    against the current time — *On shift now*, *Starts at HH:MM*, *Ended at
    HH:MM*, *No shift today*. Only an *On shift now* employee can report an
@@ -78,7 +79,9 @@ Each state change is one click away from the full story: *View detail* opens
 the rescue detail with the agent timeline and the candidates.
 
 **Skip the waiting:** the demo clock (Simulator, *+10 min* / *+1h*) moves the
-shared virtual time, so deadlines and escalations happen in seconds. Broker
+shared virtual time, so deadlines and escalations happen in seconds. The total
+offset is clamped to **±6 hours** — past that the clock just stops, because a
+day shifted far ahead turns every shift into "already finished". Broker
 timers keep their real-time ETA — the Simulator says so in one line.
 
 **A late acceptance is not lost.** When a case escalates, the offers that are

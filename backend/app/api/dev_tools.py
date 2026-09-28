@@ -57,8 +57,15 @@ router = APIRouter(
 
 logger = structlog.get_logger(__name__)
 
-# Sane bound for one demo advance: ±30 days in whole seconds.
+# Sane bound for one demo advance *request*: ±30 days in whole seconds.
+# Anything past the demo bound below is clamped, not rejected.
 MAX_DEMO_OFFSET_SECONDS = 30 * 24 * 3600
+
+# Documented demo bound for the *total* offset: ±6 hours. The demo clock is
+# an affordance to bring a deadline forward, not a time machine: beyond a few
+# hours every shift of the day reads as finished and the screens lie. The
+# advance route clamps the stored offset to this bound and reports it.
+MAX_DEMO_TOTAL_OFFSET_SECONDS = 6 * 3600
 
 # The synthetic sid namespace: every simulated message stays distinguishable
 # from a real Twilio one by its `provider_message_id` alone (acceptance 4).
@@ -79,6 +86,10 @@ class ClockAdvanceIn(BaseModel):
 class DemoClockOut(BaseModel):
     now: str  # ISO-8601 virtual time
     offsetSeconds: int
+    clamped: bool = Field(
+        default=False,
+        description="True when an advance was cut at the ±6 h demo bound",
+    )
 
 
 class DemoMutationOut(BaseModel):
@@ -153,23 +164,43 @@ async def advance_demo_clock(
     """Move the shared demo-clock offset and sweep for overdue cases.
 
     The offset lives in Redis (`DEMO_CLOCK_OFFSET_KEY`), so the API and the
-    worker agree on the new "now". The reconcile sweep runs right after the
-    move so cases whose deadline has passed escalate immediately instead of
-    waiting for the 60 s beat tick. Broker timers keep their real-time ETA —
-    that limitation is the UI's and the runbook's to state, not this route's.
+    worker agree on the new "now". The total offset is clamped to the
+    documented demo bound of **±6 hours** (`MAX_DEMO_TOTAL_OFFSET_SECONDS`):
+    the demo clock only exists to bring a deadline forward, and a clock left
+    tens of hours ahead silently turns every shift of the day into "already
+    finished". The answer reports the applied offset plus `clamped: true`
+    when the request was cut at the bound. The reconcile sweep runs right
+    after the move so cases whose deadline has passed escalate immediately
+    instead of waiting for the 60 s beat tick. Broker timers keep their
+    real-time ETA — that limitation is the UI's and the runbook's to state,
+    not this route's.
     """
     try:
-        # Sync Redis client: `incrby` answers the new value directly.
-        offset = cast(int, client.incrby(DEMO_CLOCK_OFFSET_KEY, body.seconds))
-    except (RedisError, OSError) as error:
+        # Read-modify-write instead of `incrby`: the clamp needs the proposed
+        # total to decide whether to store the cut value instead.
+        raw = cast("str | bytes | None", client.get(DEMO_CLOCK_OFFSET_KEY))
+        current = int(raw or 0)
+        proposed = current + body.seconds
+        clamped = abs(proposed) > MAX_DEMO_TOTAL_OFFSET_SECONDS
+        offset = max(
+            -MAX_DEMO_TOTAL_OFFSET_SECONDS,
+            min(MAX_DEMO_TOTAL_OFFSET_SECONDS, proposed),
+        )
+        client.set(DEMO_CLOCK_OFFSET_KEY, str(offset))
+    except (RedisError, OSError, ValueError) as error:
         logger.error("demo_clock_advance_failed", error=str(error)[:200])
         raise HTTPException(status_code=503, detail="Demo clock is unavailable") from None
     clock = DemoClock(redis_offset_source(client))
     # Sweep immediately (decision 3): overdue cases escalate now, not at the
     # next 60 s beat tick. A broker rejection must be loud, like the webhook's.
     reconcile_stale_cases.delay()
-    logger.info("demo_clock_advanced", seconds=body.seconds, offset_seconds=offset)
-    return DemoClockOut(now=iso_utc(clock.now()), offsetSeconds=offset)
+    logger.info(
+        "demo_clock_advanced",
+        seconds=body.seconds,
+        offset_seconds=offset,
+        clamped=clamped,
+    )
+    return DemoClockOut(now=iso_utc(clock.now()), offsetSeconds=offset, clamped=clamped)
 
 
 @router.post("/clock/reset", response_model=DemoClockOut)

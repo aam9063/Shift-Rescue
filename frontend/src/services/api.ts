@@ -289,6 +289,8 @@ export async function fetchRescueDetail(rescueId: string): Promise<RescueDetail>
 interface DemoClockWire {
   now: string
   offsetSeconds: number
+  /** True when an advance was cut at the backend's ±6 h demo bound. */
+  clamped: boolean
 }
 
 /** The roster for the Simulator screen: real employees with today's shift

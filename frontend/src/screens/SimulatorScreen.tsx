@@ -15,6 +15,11 @@ const CLOCK_PRESETS = [
   { label: '+1h', seconds: 3600 },
 ]
 
+/** From this total offset up (either direction) the shifted clock is not a
+ * footnote but a prominent warning: beyond an hour the shift windows of the
+ * day stop being where they look, which is exactly how a demo gets wrecked. */
+const PROMINENT_SHIFT_WARNING_SECONDS = 3600
+
 function initials(name: string): string {
   return (
     name
@@ -229,7 +234,7 @@ function EmployeePhone({
  */
 export function SimulatorScreen() {
   const { employees } = useDemoEmployees()
-  const { time, offsetSeconds, virtualNow, advance, reset } = useDemoClock()
+  const { time, offsetSeconds, clamped, virtualNow, advance, reset } = useDemoClock()
   const scenario = useAcceptanceRaceScenario()
   const demoReset = useDemoDataReset()
   const [confirmingReset, setConfirmingReset] = useState(false)
@@ -240,6 +245,7 @@ export function SimulatorScreen() {
     .sort((a, b) => SITUATION_RANK[a.situation.kind] - SITUATION_RANK[b.situation.kind])
   const nobodyOnShift = !roster.some((entry) => entry.situation.kind === 'on-shift')
   const offset = offsetSeconds ?? 0
+  const clockFarShifted = Math.abs(offset) >= PROMINENT_SHIFT_WARNING_SECONDS
 
   return (
     <div className="space-y-6">
@@ -261,6 +267,30 @@ export function SimulatorScreen() {
           &quot;out of scope&quot;. Reseed the demo data, or reset the demo clock to move
           &quot;now&quot; back to a moment when someone is working.
         </p>
+      )}
+
+      {clockFarShifted && (
+        <div
+          role="alert"
+          data-testid="clock-shifted-banner"
+          className="rounded-card bg-error px-4 py-3 text-sm tracking-tight text-white shadow-card"
+        >
+          <p className="font-semibold">
+            The demo clock is shifted {formatDemoOffset(offset)}.
+          </p>
+          <p>
+            The shift windows of the day are not where they look: employees who
+            should be on shift read as finished, and vice versa. Reset the
+            clock to put the demo back on real time.
+          </p>
+          <button
+            type="button"
+            onClick={reset}
+            className="pointer-coarse:min-h-11 mt-2 cursor-pointer rounded-pill bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-error active:scale-95"
+          >
+            Reset clock
+          </button>
+        </div>
       )}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -336,11 +366,19 @@ export function SimulatorScreen() {
               {formatResetSummary(demoReset.summary)}
             </p>
           )}
-          <p className="w-full text-xs tracking-tight text-text-secondary">
-            Broker timers keep their real-time ETA; deadlines and escalations follow the demo clock.
-            {offset !== 0 &&
-              ` The agent's "now" is shifted ${formatDemoOffset(offset)}: conversations and deadlines follow the shifted clock. Reset it if the screens look displaced.`}
-          </p>
+          {clamped && (
+            <p role="status" className="w-full text-xs tracking-tight text-text-primary">
+              The requested advance went past the demo bound, so the clock stops at ±6 h.
+            </p>
+          )}
+          {!clockFarShifted && (
+            <p className="w-full text-xs tracking-tight text-text-secondary">
+              Broker timers keep their real-time ETA; deadlines and escalations follow the demo
+              clock.
+              {offset !== 0 &&
+                ` The agent's "now" is shifted ${formatDemoOffset(offset)}: conversations and deadlines follow the shifted clock. Reset it if the screens look displaced.`}
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-start gap-1">
           <button

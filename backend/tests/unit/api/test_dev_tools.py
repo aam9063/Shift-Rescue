@@ -216,7 +216,63 @@ async def test_clock_advance_accepts_negative_seconds(dev_client, fake_redis) ->
 
     assert response.status_code == 200
     assert response.json()["offsetSeconds"] == -120
+    assert response.json()["clamped"] is False
     assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == "-120"
+
+
+# --- the ±6 h demo bound: the total offset is clamped, never rejected ---------
+
+
+async def test_clock_advance_clamps_the_total_offset_at_the_demo_bound(
+    dev_client, fake_redis
+) -> None:
+    # The observed failure this prevents: repeated +1h clicks left the clock
+    # +40 h ahead and every shift of the day read as finished. The total is
+    # cut at the documented ±6 h bound, never stored beyond it.
+    fake_redis.values[DEMO_CLOCK_OFFSET_KEY] = str(6 * 3600)
+
+    response = await dev_client.post(
+        "/dev/clock/advance", json={"seconds": 600}, headers=auth_headers()
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["offsetSeconds"] == 6 * 3600
+    assert body["clamped"] is True
+    assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == str(6 * 3600)
+
+
+async def test_clock_advance_clamps_a_single_huge_request(dev_client, fake_redis) -> None:
+    response = await dev_client.post(
+        "/dev/clock/advance", json={"seconds": 40 * 3600}, headers=auth_headers()
+    )
+
+    assert response.status_code == 200
+    assert response.json()["offsetSeconds"] == 6 * 3600
+    assert response.json()["clamped"] is True
+    assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == str(6 * 3600)
+
+
+async def test_clock_advance_within_the_bound_is_not_clamped(dev_client, fake_redis) -> None:
+    response = await dev_client.post(
+        "/dev/clock/advance", json={"seconds": 3600}, headers=auth_headers()
+    )
+
+    assert response.status_code == 200
+    assert response.json()["offsetSeconds"] == 3600
+    assert response.json()["clamped"] is False
+    assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == "3600"
+
+
+async def test_clock_advance_clamps_on_the_negative_side(dev_client, fake_redis) -> None:
+    response = await dev_client.post(
+        "/dev/clock/advance", json={"seconds": -40 * 3600}, headers=auth_headers()
+    )
+
+    assert response.status_code == 200
+    assert response.json()["offsetSeconds"] == -6 * 3600
+    assert response.json()["clamped"] is True
+    assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == str(-6 * 3600)
 
 
 async def test_clock_advance_rejects_an_unsane_bound(dev_client) -> None:
@@ -242,6 +298,7 @@ async def test_clock_reset_zeroes_the_offset_and_enqueues_the_sweep(
     assert response.status_code == 200
     body = response.json()
     assert body["offsetSeconds"] == 0
+    assert body["clamped"] is False
     assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == "0"
     assert stub_sweep.calls == [()]
     virtual = datetime.fromisoformat(body["now"])

@@ -84,14 +84,17 @@ beforeEach(() => {
   vi.mocked(fetchDemoClock).mockResolvedValue({
     now: '2026-10-03T15:11:00+00:00',
     offsetSeconds: 0,
+    clamped: false,
   })
   vi.mocked(advanceDemoClock).mockResolvedValue({
     now: '2026-10-03T15:21:00+00:00',
     offsetSeconds: 600,
+    clamped: false,
   })
   vi.mocked(resetDemoClock).mockResolvedValue({
     now: '2026-10-03T15:11:00+00:00',
     offsetSeconds: 0,
+    clamped: false,
   })
   vi.mocked(resetDemoData).mockResolvedValue({
     deleted: { rescue_case: 2, message: 5, offer: 3, shift: 14 },
@@ -228,30 +231,88 @@ describe('SimulatorScreen (spec §7.6, real data)', () => {
     expect(await screen.findByText('Ended at 15:00')).toBeInTheDocument()
   })
 
-  it('shows the offset in human terms and explains a non-zero one', async () => {
+  it('shows the offset in human terms and warns prominently at an hour or more', async () => {
     vi.mocked(fetchDemoClock).mockResolvedValue({
       now: '2026-10-03T21:00:00+00:00',
       offsetSeconds: 23400,
+      clamped: false,
     })
     renderScreen()
 
     // +6 h 30 m: the leftover-offset situation that motivated the feature.
     expect((await screen.findAllByText(/\+6 h 30 m ahead/)).length).toBeGreaterThan(0)
+    // Prominent, impossible to miss: it states the consequence in plain
+    // English and carries the fix inside it.
+    const banner = screen.getByTestId('clock-shifted-banner')
+    expect(banner).toHaveAttribute('role', 'alert')
     expect(
-      screen.getByText(/The agent's "now" is shifted \+6 h 30 m ahead/),
+      within(banner).getByText(/employees who should be on shift read as finished/),
     ).toBeInTheDocument()
+    expect(within(banner).getByRole('button', { name: 'Reset clock' })).toBeInTheDocument()
+    // The small grey note is reserved for smaller offsets.
+    expect(screen.queryByText(/The agent's "now" is shifted/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the small note (and no banner) for offsets below an hour', async () => {
+    vi.mocked(fetchDemoClock).mockResolvedValue({
+      now: '2026-10-03T15:21:00+00:00',
+      offsetSeconds: 600,
+      clamped: false,
+    })
+    renderScreen()
+
+    await screen.findByText(/The agent's "now" is shifted \+10 m ahead/)
+    expect(screen.queryByTestId('clock-shifted-banner')).not.toBeInTheDocument()
+    expect(screen.getByText(/The agent's "now" is shifted \+10 m ahead/)).toBeInTheDocument()
+  })
+
+  it('says when the endpoint clamped an advance at the ±6 h bound', async () => {
+    vi.mocked(advanceDemoClock).mockResolvedValue({
+      now: '2026-10-03T21:11:00+00:00',
+      offsetSeconds: 21600,
+      clamped: true,
+    })
+    const user = userEvent.setup()
+    renderScreen()
+    await screen.findByText('15:11')
+
+    await user.click(screen.getByRole('button', { name: '+1h' }))
+
+    expect(advanceDemoClock).toHaveBeenCalledWith(3600)
+    expect(await screen.findByText(/the clock stops at ±6 h/)).toBeInTheDocument()
+  })
+
+  it('resets the demo clock from the prominent warning itself', async () => {
+    vi.mocked(fetchDemoClock).mockResolvedValue({
+      now: '2026-10-03T21:00:00+00:00',
+      offsetSeconds: 23400,
+      clamped: false,
+    })
+    const user = userEvent.setup()
+    renderScreen()
+    const banner = await screen.findByTestId('clock-shifted-banner')
+
+    await user.click(within(banner).getByRole('button', { name: 'Reset clock' }))
+
+    expect(resetDemoClock).toHaveBeenCalledTimes(1)
+    // The reset answer puts the clock back on real time and dismisses the warning.
+    expect(await screen.findByText(/on real time/)).toBeInTheDocument()
+    expect(screen.queryByTestId('clock-shifted-banner')).not.toBeInTheDocument()
+    expect(screen.queryByText(/\+6 h 30 m ahead/)).not.toBeInTheDocument()
   })
 
   it('resets the demo clock through the endpoint', async () => {
     vi.mocked(fetchDemoClock).mockResolvedValue({
       now: '2026-10-03T21:00:00+00:00',
       offsetSeconds: 23400,
+      clamped: false,
     })
     const user = userEvent.setup()
     renderScreen()
     expect((await screen.findAllByText(/\+6 h 30 m ahead/)).length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('button', { name: 'Reset clock' }))
+    // The control-panel control (the banner carries its own Reset action).
+    await user.click(screen.getAllByRole('button', { name: 'Reset clock' })[0])
 
     expect(resetDemoClock).toHaveBeenCalledTimes(1)
     // The reset answer puts the clock back on real time.
