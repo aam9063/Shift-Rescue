@@ -23,6 +23,7 @@ dependencies = [
     "httpx>=0.28.1",
     "argon2-cffi>=23.1",  # password hashing for manager login (spec §7.5)
     "pyjwt>=2.9",  # JWT issue/verify for the dashboard API (spec §7.5)
+    "sentry-sdk>=2.0",  # error/performance monitoring, init only when SENTRY_DSN is set
 ]
 
 [dependency-groups]

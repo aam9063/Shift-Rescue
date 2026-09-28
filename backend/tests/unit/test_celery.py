@@ -11,6 +11,7 @@ from structlog.testing import capture_logs
 import app.runtime as runtime_module
 import app.workers.tasks as tasks
 import app.workers.tracing_bootstrap as bootstrap
+from app.core.clock import SystemClock
 from app.core.config import Settings, get_settings
 from app.workers.celery_app import celery_app
 from app.workers.scheduler import SimScheduler
@@ -36,10 +37,13 @@ def test_retention_purge_task_is_registered() -> None:
 # --- beat schedule (spec §7.3) ------------------------------------------------
 
 
-def test_beat_schedule_ticks_the_scheduler_every_five_seconds() -> None:
-    entry = celery_app.conf.beat_schedule["run-due-jobs"]
-    assert entry["task"] == "app.workers.tasks.run_due_jobs"
-    assert entry["schedule"] == 5.0
+def test_beat_schedule_does_not_tick_the_scheduler() -> None:
+    """Timers are broker-owned (CeleryScheduler): no beat tick scans a queue.
+
+    `run-due-jobs` drove the in-memory SimScheduler and always found zero due
+    jobs in the preforked worker; the entry is gone and must not come back.
+    """
+    assert "run-due-jobs" not in celery_app.conf.beat_schedule
 
 
 def test_beat_schedule_runs_the_retention_purge_daily() -> None:
@@ -64,6 +68,9 @@ class FakeRuntime:
         self._error = error
         self.scheduler = SimScheduler()
         self.interpreter = None
+        # The reconcile sweep takes these as arguments before the stubbed body runs.
+        self.session_factory = None
+        self.clock = SystemClock()
         self.calls: list[tuple[str, str, str]] = []
 
     async def handle_inbound(self, from_phone: str, message_sid: str, body: str) -> bool:
@@ -288,3 +295,25 @@ def test_worker_process_init_swallows_configure_failures(monkeypatch) -> None:
     failures = [e for e in logs if e["event"] == "worker_tracing_bootstrap_failed"]
     assert len(failures) == 1
     assert "otel exploded" in failures[0]["error"]
+
+async def _reconcile_none(*args, **kwargs):
+    return 0
+
+
+def test_reconcile_publishes_the_snapshot(monkeypatch, fake_runtime: FakeRuntime) -> None:
+    """The sweep is the heartbeat the degraded banner depends on.
+
+    It used to ride on the memory-scheduler tick; with broker-owned timers that
+    tick is gone (and no longer scheduled), so if the sweep stopped publishing the
+    snapshot an open circuit breaker would silently stop reaching /api/status.
+    """
+    published: list[dict] = []
+    monkeypatch.setattr(
+        tasks, "publish_runtime_snapshot", lambda runtime: published.append(runtime)
+    )
+    monkeypatch.setattr(tasks, "_reconcile_stale_cases", _reconcile_none)
+    monkeypatch.setattr("app.runtime.get_worker_runtime", lambda: fake_runtime)
+
+    tasks.reconcile_stale_cases()
+
+    assert published == [fake_runtime]

@@ -186,9 +186,9 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://<domain>/   # 200 (SPA)
 
 The **worker and beat containers are required for the demo**: the API only
 enqueues the inbound task (spec §7.5), the worker runs the orchestration and
-the LLM, and beat ticks the scheduler (`run-due-jobs`, every 5 s) plus the
-daily retention purge. `docker compose ps` must show `api`, `worker`, `beat`,
-`redis` and `postgres` up.
+the LLM, and beat runs the reconcile sweep (`reconcile-stale-cases`, every
+60 s) plus the daily retention purge. `docker compose ps` must show `api`,
+`worker`, `beat`, `redis` and `postgres` up.
 
 If a message gets no reply, check in this order:
 
@@ -340,10 +340,11 @@ Safety nets, in order:
    recovers a timer lost to a crash between the database commit and the
    enqueue.
 
-Beat still ticks `run-due-jobs` (5 s), which drives the `memory` scheduler
-backend (`SCHEDULER_BACKEND=memory`, for a single-process local run) and
-refreshes the API status snapshot. `SCHEDULER_BACKEND=celery` is the
-production default.
+Beat no longer ticks a scheduler queue: timers are broker-owned
+(`CeleryScheduler` publishes each one as a deferred task), so the
+`run-due-jobs` entry was removed. The `memory` scheduler backend remains
+only for the eval harness and single-process local runs
+(`SCHEDULER_BACKEND=memory`).
 
 ### Record an eval run and see it in the dashboard
 
@@ -394,7 +395,7 @@ command above; the mock fixture stays available offline behind
 | `20003 Primary compliance profile` | Twilio Trust Hub profile `draft` | complete and submit the profile in Trust Hub |
 | Rescue looks stuck (no wave, no escalation) | `logs worker \| grep reconcile_stale_cases_recovered`; `docker compose ps` (worker and beat up?) | the reconcile sweep re-enqueues overdue deadline timers every 60 s, so a stuck case escalates within a minute of beat running; if it does not, check worker/beat are up and Redis is reachable — do not re-run the flow first |
 | Message gets no reply | see §4 checklist | API enqueues (`twilio_inbound_received`), worker processes (`worker_inbound_processed`); a `twilio_inbound_enqueue_failed` 500 means Redis/broker down — Twilio retries, recover Redis |
-| Timeouts/purge never fire | `docker compose ps` shows `beat` down | start beat: `docker compose up -d beat` — beat owns `run-due-jobs` (every 5 s) and the daily purge |
+| Timeouts/purge never fire | `docker compose ps` shows `beat` down | start beat: `docker compose up -d beat` — beat owns `reconcile-stale-cases` (every 60 s) and the daily purge |
 | DB full / slow | `df -h`, `docker system df` | prune images (`docker image prune -f`), grow the EBS volume |
 
 ## 7. Rollback

@@ -14,6 +14,7 @@ import pytest
 from app.workers.tasks import (
     apply_scheduled_job,
     close_rescue_task,
+    mark_shift_absence_task,
     process_inbound_message,
     reconcile_stale_cases,
 )
@@ -23,6 +24,7 @@ _ENQUEUING_TASKS = (
     reconcile_stale_cases,
     apply_scheduled_job,
     close_rescue_task,
+    mark_shift_absence_task,
 )
 
 _calls: list[tuple[str, tuple]] = []

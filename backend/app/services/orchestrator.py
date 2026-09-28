@@ -13,6 +13,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import structlog
+from opentelemetry.trace import get_current_span
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,6 +33,7 @@ from app.db.models import (
     Message,
     Offer,
     RescueCase,
+    Shift,
 )
 from app.db.models import Interpretation as InterpretationRow
 from app.domain.eligibility import evaluate_eligibility
@@ -553,6 +555,13 @@ class RescueOrchestrator:
                 "contains_health_details": interpreted.contains_health_details,
                 "question_text": interpreted.question_text,
             }
+            # Trace link (spec §7.6): the API derives the Langfuse URL from
+            # `extracted["trace_id"]`. Stored only when a valid span is
+            # active — tracing off leaves the key out entirely, so the link
+            # stays null exactly as before.
+            trace_id = _current_trace_id()
+            if trace_id is not None:
+                extracted["trace_id"] = trace_id
             async with self._sessions() as session:
                 session.add(
                     InterpretationRow(
@@ -1758,6 +1767,85 @@ class RescueOrchestrator:
             await session.execute(select(Offer).where(Offer.id == offer_id))
         ).scalar_one_or_none()
 
+    async def mark_absence(
+        self, shift_id: str, manager_id: str, reason: str | None = None
+    ) -> str | None:
+        """Manager marks a shift absent from the dashboard (spec §7.5).
+
+        The manager action is authoritative, so no employee confirmation is
+        needed: the case is created here (origin `manager_dashboard`, audit
+        `ABSENCE_MARKED` with `actor="manager:<id>"`) and everything else —
+        the HRIS absence, the deadline, wave 1 and the manager notice —
+        reuses exactly the confirmed-absence path (`_handle_confirmation`).
+        An optional `reason` rides only in the audit payload, health-redacted
+        by the API and never stored anywhere else (spec §10).
+
+        Returns the case id, or None when the shift is gone, has no assignee,
+        is already absent or already has a live case. The API answers
+        404/409 from the same checks at request time; this second guard makes
+        a redelivered task (acks_late) a harmless no-op instead of a second
+        rescue.
+        """
+        now = self._clock.now()
+        async with self._sessions() as session:
+            shift = (
+                await session.execute(select(Shift).where(Shift.id == shift_id))
+            ).scalar_one_or_none()
+            if shift is None or shift.employee_id is None or shift.status == "absent":
+                return None
+            live = (
+                await session.execute(
+                    select(RescueCase.id).where(
+                        RescueCase.shift_id == shift_id,
+                        RescueCase.status.in_(_LIVE_CASE_STATUSES),
+                    )
+                )
+            ).first()
+            if live is not None:
+                return None
+
+            employee_id = shift.employee_id
+            case_id = f"case_{uuid4().hex}"
+            session.add(
+                RescueCase(
+                    id=case_id,
+                    location_id=shift.location_id,
+                    shift_id=shift_id,
+                    absent_employee_id=employee_id,
+                    origin="manager_dashboard",
+                    status=State.OPEN.value,
+                    opened_at=now,
+                    deadline_at=self._deadline_for(now, shift),
+                )
+            )
+            payload: dict[str, Any] = {"shift_id": shift_id}
+            if reason:
+                payload["reason"] = redact_if_health(reason)[:200]
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=case_id,
+                    type="ABSENCE_MARKED",
+                    payload=payload,
+                    actor=f"manager:{manager_id}",
+                )
+            )
+            await session.commit()
+
+        await self._emit(
+            EventName.RESCUE_OPENED,
+            location_id=shift.location_id,
+            rescue_id=case_id,
+            shift_id=shift_id,
+            origin=f"manager:{manager_id}",
+        )
+        # The confirmed-absence path owns the transition, the deadline, wave 1
+        # and the manager notice; the conversation id is only consulted by its
+        # no-case branch, which a case created just above never takes.
+        conversation_id = await self._conversation_for(employee_id)
+        await self._handle_confirmation(conversation_id or "", employee_id)
+        return case_id
+
     async def close_rescue(self, rescue_id: str, decided_by: str) -> None:
         """Manual manager close (spec §7.5), runs in the worker.
 
@@ -2608,6 +2696,29 @@ class RescueOrchestrator:
     def _fmt(self, moment: datetime, tz_name: str | None = None) -> str:
         tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
         return moment.astimezone(tz).strftime("%H:%M")
+
+
+# Case statuses where a rescue is still running on a shift: the manager
+# absence endpoint answers 409 for these (spec §7.5) and the orchestrator's
+# redelivery guard refuses to open a second case.
+_LIVE_CASE_STATUSES = (
+    State.OPEN.value,
+    State.OFFERING.value,
+    State.AWAITING_APPROVAL.value,
+    State.ESCALATED.value,
+)
+
+
+def _current_trace_id() -> str | None:
+    """Current OTel trace id (hex) when a valid span is active, else None.
+
+    Tracing off (or no active span) returns None: nothing is stored under
+    `extracted["trace_id"]` and the API's Langfuse link stays null.
+    """
+    context = get_current_span().get_span_context()
+    if context is not None and context.is_valid:
+        return format(context.trace_id, "032x")
+    return None
 
 
 def _utc(moment: datetime) -> datetime:

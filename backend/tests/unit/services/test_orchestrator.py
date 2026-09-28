@@ -829,3 +829,113 @@ async def test_the_race_loser_notice_is_stored_in_their_conversation(world, db) 
 
     assert stored, "the loser's notice must be in their conversation"
     assert "ya se ha cubierto" in stored[0].body_redacted
+
+
+# --- manager-marked absence (spec §7.5) ---------------------------------------
+
+
+async def test_manager_marked_absence_reuses_the_confirmation_path(world, db, now) -> None:
+    """The dashboard action is authoritative: the case opens and wave 1 goes
+    out with no employee round trip, exactly like a confirmed absence."""
+    case_id = await world.orchestrator.mark_absence("shift_1", "mgr_1")
+
+    assert case_id is not None and case_id.startswith("case_")
+    async with db() as session:
+        case = (
+            await session.execute(select(RescueCase).where(RescueCase.id == case_id))
+        ).scalar_one()
+        shift = (await session.execute(select(Shift).where(Shift.id == "shift_1"))).scalar_one()
+        events = (
+            await session.execute(select(AuditEvent).where(AuditEvent.rescue_id == case_id))
+        ).scalars().all()
+        offers = (
+            await session.execute(select(Offer).where(Offer.rescue_id == case_id))
+        ).scalars().all()
+
+    assert case.origin == "manager_dashboard"
+    assert case.status == "OFFERING"
+    assert case.absent_employee_id == "emp_01_floor"
+    assert shift.status == "absent"  # marked in the HRIS
+    marked = [e for e in events if e.type == "ABSENCE_MARKED"]
+    assert [e.actor for e in marked] == ["manager:mgr_1"]
+    assert marked[0].payload == {"shift_id": "shift_1"}
+    assert any(e.type == "RESCUE_OPENED" for e in events)
+    assert {offer.wave_number for offer in offers} == {1}
+    # Deadline and wave timers are scheduled (broker-owned in production).
+    assert world.scheduler.pending_count() == 2
+    # The manager is notified the rescue opened.
+    assert world.channel.with_template("manager_rescue_opened")
+
+
+async def test_manager_marked_absence_records_the_reason_in_the_audit_payload(
+    world, db
+) -> None:
+    """An optional reason lives only in the ABSENCE_MARKED payload (§10)."""
+    case_id = await world.orchestrator.mark_absence(
+        "shift_1", "mgr_1", reason="llamo y no contesta"
+    )
+
+    async with db() as session:
+        event = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.rescue_id == case_id,
+                    AuditEvent.type == "ABSENCE_MARKED",
+                )
+            )
+        ).scalar_one()
+    assert event.payload["reason"] == "llamo y no contesta"
+
+
+async def test_manager_marked_absence_refuses_a_second_rescue(world, db) -> None:
+    """A redelivery (or a double click) must not open a second case."""
+    first = await world.orchestrator.mark_absence("shift_1", "mgr_1")
+    second = await world.orchestrator.mark_absence("shift_1", "mgr_1")
+
+    assert first is not None
+    assert second is None  # shift already absent, case already running
+    async with db() as session:
+        count = (
+            await session.execute(select(func.count()).select_from(RescueCase))
+        ).scalar_one()
+    assert count == 1
+
+
+async def test_manager_marked_absence_for_a_shift_with_a_live_case_returns_none(
+    world, db, now
+) -> None:
+    """An OFFERING rescue on a scheduled shift is a conflict, not a new case."""
+    async with db() as session:
+        session.add(
+            Shift(
+                id="shift_live",
+                location_id=DEMO_LOCATION_ID,
+                role="bar",
+                starts_at=now + timedelta(hours=4),
+                ends_at=now + timedelta(hours=12),
+                employee_id="emp_02_floor",
+                status="scheduled",
+            )
+        )
+        session.add(
+            RescueCase(
+                id="case_live",
+                location_id=DEMO_LOCATION_ID,
+                shift_id="shift_live",
+                absent_employee_id="emp_02_floor",
+                origin="employee_message",
+                status="OFFERING",
+                opened_at=now,
+                deadline_at=now + timedelta(minutes=30),
+            )
+        )
+        await session.commit()
+
+    result = await world.orchestrator.mark_absence("shift_live", "mgr_1")
+
+    assert result is None
+    async with db() as session:
+        count = (
+            await session.execute(select(func.count()).select_from(RescueCase))
+        ).scalar_one()
+    assert count == 1

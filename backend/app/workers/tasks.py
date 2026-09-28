@@ -87,6 +87,24 @@ def close_rescue_task(rescue_id: str, decided_by: str) -> bool:
     return True
 
 
+@celery_app.task(name="app.workers.tasks.mark_shift_absence")
+def mark_shift_absence_task(shift_id: str, manager_id: str, reason: str | None = None) -> bool:
+    """Manager-marked absence in the worker (spec §7.5).
+
+    The orchestrator owns the domain change: it re-checks shift state (a
+    redelivered task is a no-op), opens the case and reuses the
+    confirmed-absence path for the HRIS absence, deadline, wave 1 and the
+    manager notice.
+    """
+    from app.runtime import get_worker_runtime
+
+    case_id = run_async(
+        get_worker_runtime().orchestrator.mark_absence(shift_id, manager_id, reason)
+    )
+    logger.info("worker_shift_absence_marked", shift_id=shift_id, case_id=case_id)
+    return case_id is not None
+
+
 @celery_app.task(
     name="app.workers.tasks.apply_scheduled_job",
     bind=True,
@@ -166,6 +184,11 @@ def reconcile_stale_cases() -> int:
     )
     if recovered:
         logger.warning("reconcile_stale_cases_recovered", count=recovered)
+    # This sweep is the heartbeat that keeps the degraded-status snapshot fresh
+    # for the API probe (spec §9.3). It used to ride on the memory-scheduler
+    # tick, which the broker-owned timers made obsolete: without moving it here
+    # an open circuit breaker would silently stop reaching the dashboard banner.
+    publish_runtime_snapshot(runtime)
     return recovered
 
 
