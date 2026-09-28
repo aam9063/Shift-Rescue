@@ -7,19 +7,35 @@ unknown variables are ignored (`extra="ignore"`).
 
 import base64
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve `backend/.env` from the module, not from the current directory: the same
+# settings are used by the API (whose cwd is the package) and by tools run from
+# the repository root (the eval runner), and a cwd-relative file silently fell
+# back to the default port instead of the configured database.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     app_env: str = "local"
     service_name: str = "shift-rescue-backend"
     database_url: str = "postgresql+asyncpg://shift_rescue:shift_rescue@localhost:5432/shift_rescue"
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = "dev-only-secret"
+    jwt_expires_minutes: int = 720  # 12 h access tokens (spec §7.5)
+    # Comma-separated origins allowed by CORS for the dashboard SPA (spec §7.5).
+    cors_origins: str = "http://localhost:5173"
     demo_real_phones: str | None = None  # "Name:+346...|Name:+346..." (max 3, sandbox)
+
+    # Timer backend (spec §7.3): "celery" publishes each timer as one deferred
+    # broker task (survives worker restarts, any prefork child can run it);
+    # "memory" keeps the in-process SimScheduler for a single-process local run
+    # and the eval harness.
+    scheduler_backend: str = "celery"
 
     # Twilio WhatsApp (docs/twilio-sandbox-setup.md)
     twilio_account_sid: str = ""
@@ -51,6 +67,21 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
     sentry_dsn: str = ""  # declared for .env parity; Sentry init not wired yet
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Parsed CORS origins: exactly the configured ones, no wildcard."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def demo_clock_enabled(self) -> bool:
+        """True in demo environments (spec §7.5): local, test or demo.
+
+        Gates the demo simulator: `/dev/*` routes exist only when this is on,
+        and the worker builds a shared-offset `DemoClock` instead of the
+        system clock. Production never sees either.
+        """
+        return self.app_env.strip().lower() in {"local", "test", "demo"}
 
     @property
     def llm_enabled(self) -> bool:

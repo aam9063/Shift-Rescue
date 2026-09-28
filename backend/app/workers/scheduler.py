@@ -31,6 +31,13 @@ class SimScheduler:
     def register(self, task_name: str, handler: Handler) -> None:
         self._handlers[task_name] = handler
 
+    def handler_for(self, task_name: str) -> Handler:
+        """Resolve the handler for `task_name` (loud on an unknown name)."""
+        try:
+            return self._handlers[task_name]
+        except KeyError:
+            raise KeyError(f"No handler registered for task '{task_name}'") from None
+
     def schedule(self, run_at: datetime, task_name: str, payload: dict[str, Any]) -> str:
         self._seq += 1
         job_id = f"job_{self._seq}"

@@ -1,11 +1,18 @@
+import { useState } from 'react'
 import {
   eventLabel,
   orderCandidates,
   sortEventsChronologically,
 } from '../domain/rescue'
+import { approvalKindLabel } from '../domain/approvals'
 import type { AuditEvent, CandidateResult, Offer, OfferStatus, RescueDetail } from '../domain/types'
 import { formatCountdownParts, formatShiftTime } from '../domain/today'
-import { useRescueDetail } from '../services/hooks'
+import {
+  useCloseRescue,
+  useDecideApproval,
+  usePendingApprovals,
+  useRescueDetail,
+} from '../services/hooks'
 
 const TIMEZONE = 'Europe/Madrid'
 
@@ -15,7 +22,12 @@ const rescueStatusLabels: Record<string, string> = {
   AWAITING_APPROVAL: 'Needs your approval',
   COVERED: 'Covered',
   ESCALATED: 'Escalated to manager',
+  CLOSED_BY_MANAGER: 'Closed by manager',
 }
+
+/** Statuses with a live deadline: the only ones that keep a countdown
+ * (feature manager-can-act T4 — a terminal case has nothing pending). */
+const LIVE_STATUSES = new Set(['OPEN', 'OFFERING', 'AWAITING_APPROVAL'])
 
 /** Timeline dot color by event semantics (mockup: gray system, green offers, red rejections). */
 const eventDotClasses: Partial<Record<AuditEvent['type'], string>> = {
@@ -55,8 +67,34 @@ function timeOf(iso: string): string {
   }).format(new Date(iso))
 }
 
+/** Terminal outcome instead of a countdown: when it escalated, or who took
+ * the shift (feature manager-can-act T4). */
+function TerminalOutcome({ detail }: { detail: RescueDetail }) {
+  if (detail.rescue.status === 'ESCALATED') {
+    const escalatedAt =
+      sortEventsChronologically(detail.timeline).find((event) => event.type === 'ESCALATED')
+        ?.createdAt ?? detail.rescue.deadlineAt
+    return (
+      <>
+        <p className="font-serif text-5xl font-bold tracking-tight md:text-6xl">Escalated</p>
+        <p className="mt-1 text-sm tracking-tight text-white/70">at {timeOf(escalatedAt)}</p>
+      </>
+    )
+  }
+  const coveredBy =
+    detail.offers.find((offer) => offer.status === 'ACCEPTED')?.employeeName ??
+    detail.shift.assigneeName
+  return (
+    <>
+      <p className="font-serif text-5xl font-bold tracking-tight md:text-6xl">Covered</p>
+      <p className="mt-1 text-sm tracking-tight text-white/70">by {coveredBy ?? '—'}</p>
+    </>
+  )
+}
+
 function Hero({ detail, now, onBack }: { detail: RescueDetail; now: Date; onBack: () => void }) {
-  const countdown = formatCountdownParts(detail.rescue.deadlineAt, now)
+  const live = LIVE_STATUSES.has(detail.rescue.status)
+  const countdown = live ? formatCountdownParts(detail.rescue.deadlineAt, now) : undefined
   const wave =
     detail.rescue.waveCurrent != null && detail.rescue.waveTotal != null
       ? ` · wave ${detail.rescue.waveCurrent} of ${detail.rescue.waveTotal}`
@@ -67,7 +105,7 @@ function Hero({ detail, now, onBack }: { detail: RescueDetail; now: Date; onBack
         <button
           type="button"
           onClick={onBack}
-          className="cursor-pointer text-sm font-medium tracking-tight text-white/80 transition-colors hover:text-white"
+          className="pointer-coarse:min-h-11 inline-flex cursor-pointer items-center text-sm font-medium tracking-tight text-white/80 transition-colors hover:text-white"
         >
           ‹ Back to Today
         </button>
@@ -87,8 +125,14 @@ function Hero({ detail, now, onBack }: { detail: RescueDetail; now: Date; onBack
             </span>
           </div>
           <div className="text-right">
-            <p className="font-serif text-5xl font-bold tracking-tight md:text-6xl">{countdown.text}</p>
-            <p className="mt-1 text-sm tracking-tight text-white/70">{countdown.caption}</p>
+            {countdown !== undefined ? (
+              <>
+                <p className="font-serif text-5xl font-bold tracking-tight md:text-6xl">{countdown.text}</p>
+                <p className="mt-1 text-sm tracking-tight text-white/70">{countdown.caption}</p>
+              </>
+            ) : (
+              <TerminalOutcome detail={detail} />
+            )}
           </div>
         </div>
       </div>
@@ -188,6 +232,114 @@ function Candidates({
   )
 }
 
+/**
+ * What the manager does about this case from here (feature manager-can-act
+ * T2): close it (spec §7.5), and approve/reject when the case is awaiting a
+ * decision. Terminal cases offer no actions: the loop is closed.
+ */
+function ManagerActions({ detail }: { detail: RescueDetail }) {
+  const { close, isPending: isClosing } = useCloseRescue()
+  const { decide, isPending: isDeciding } = useDecideApproval()
+  const { approvals } = usePendingApprovals()
+  const [confirming, setConfirming] = useState(false)
+
+  const status = detail.rescue.status
+  if (status === 'COVERED' || status === 'CLOSED_BY_MANAGER') {
+    return null
+  }
+  // The 202 writes land when the worker runs: never promise the new state.
+  const pendingApprovals =
+    status === 'AWAITING_APPROVAL'
+      ? (approvals ?? []).filter(
+          (approval) => approval.rescueId === detail.rescue.id && approval.status === 'pending',
+        )
+      : []
+
+  return (
+    <section
+      aria-label="Manager actions"
+      className="rounded-card bg-surface px-4 py-4 shadow-card"
+    >
+      <h2 className="mb-3 text-xl font-semibold tracking-tight">Manager actions</h2>
+      {status === 'ESCALATED' && (
+        <p className="mb-3 text-sm tracking-tight text-text-secondary">
+          Nobody covered this shift in time. Resolve it outside the system (a call, or the
+          rota), then close the case here so the board reads the truth.
+        </p>
+      )}
+      {pendingApprovals.length > 0 && (
+        <ul className="mb-4 space-y-3">
+          {pendingApprovals.map((approval) => (
+            <li
+              key={approval.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-black/10 px-4 py-3"
+            >
+              <div>
+                <p className="text-sm font-semibold tracking-tight">
+                  {approvalKindLabel(approval.kind)} · {approval.context.employeeName}
+                </p>
+                <p className="text-sm tracking-tight text-text-secondary">
+                  {approval.context.detail ?? approval.context.shiftTime}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={isDeciding}
+                  onClick={() => decide(approval.id, 'approved')}
+                  className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeciding}
+                  onClick={() => decide(approval.id, 'rejected')}
+                  className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-error px-4 py-2 text-sm font-semibold tracking-tight text-error transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Reject
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap items-center gap-3">
+        {confirming ? (
+          <>
+            <button
+              type="button"
+              disabled={isClosing}
+              onClick={() => close(detail.rescue.id)}
+              className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-error px-4 py-2 text-sm font-semibold tracking-tight text-white transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Confirm close
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 px-4 py-2 text-sm font-semibold tracking-tight text-text-primary transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
+            >
+              Keep case open
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-green-house px-4 py-2 text-sm font-semibold tracking-tight text-white transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
+          >
+            Close case
+          </button>
+        )}
+        <p className="text-xs tracking-tight text-text-secondary">
+          Applies in a moment: writes are queued and the worker applies them.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export interface RescueDetailScreenProps {
   rescueId: string
   /** Injected clock for deterministic tests; defaults to now. */
@@ -209,6 +361,9 @@ export function RescueDetailScreen({ rescueId, now = new Date(), onBack }: Rescu
       <div className="mx-auto grid max-w-[1200px] grid-cols-1 gap-10 px-4 py-8 md:grid-cols-2 md:px-10">
         <Timeline events={sortEventsChronologically(detail.timeline)} />
         <Candidates candidates={detail.candidates} offers={detail.offers} />
+      </div>
+      <div className="mx-auto max-w-[1200px] px-4 pb-10 md:px-10">
+        <ManagerActions detail={detail} />
       </div>
     </div>
   )

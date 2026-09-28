@@ -31,12 +31,40 @@ _TEMPLATES: dict[str, str] = {
         "Gracias por responder, {employee_name}. El turno ya se ha cubierto, "
         "¡gracias igualmente!"
     ),
+    "state_searching_coverage": (
+        "Vale {employee_name}, tu ausencia del turno de {role} de {start} a "
+        "{end} ya está registrada y estoy buscando a alguien que te cubra. "
+        "No tienes que hacer nada más."
+    ),
+    "state_awaiting_approval": (
+        "Gracias, {employee_name}. Ya hay quien cubra tu turno de {role} de "
+        "{start} a {end}, solo falta que el encargado lo confirme. Te digo "
+        "algo en cuanto resuelva."
+    ),
+    "offer_reminder": (
+        "Hola {employee_name}, sigue abierta la propuesta de cubrir el turno "
+        "de {role} de hoy de {start} a {end}. Responde SÍ o NO, o dime hasta "
+        "qué hora puedes."
+    ),
     "ask_which_shift": (
         "Vale {employee_name}, veo varios turnos hoy: {shift_list}. ¿De cuál te "
         "das de baja?"
     ),
     "ask_clarification": (
         "No te he entendido bien. ¿Me lo repites? Responde SÍ o NO."
+    ),
+    "state_case_escalated": (
+        "Vale {employee_name}, tu ausencia del turno de {role} de {start} a {end} ya "
+        "está registrada. No llegamos a confirmarla a tiempo, así que se la he pasado "
+        "a tu encargado para que se ocupe de cubrirla. No tienes que hacer nada más."
+    ),
+    "state_case_covered": (
+        "Buenas noticias, {employee_name}: tu turno de {start} a {end} ya está cubierto. "
+        "No tienes que hacer nada más."
+    ),
+    "state_case_closed": (
+        "{employee_name}, tu aviso del turno de {start} a {end} quedó cerrado por tu "
+        "encargado. Para cualquier cosa, habla directamente con él."
     ),
     "out_of_scope": (
         "Hola, soy el asistente de turnos de {location_name} y solo gestiono "

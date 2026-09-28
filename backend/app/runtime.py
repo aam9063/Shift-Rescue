@@ -15,14 +15,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.factory import build_interpreter, describe_provider
 from app.agent.interpreter import MessageInterpreter
 from app.channels.twilio_whatsapp import TwilioWhatsAppChannel
-from app.core.clock import SystemClock
+from app.core.clock import Clock, DemoClock, SystemClock, redis_offset_source
 from app.core.config import Settings, get_settings
 from app.db.session import create_engine_and_session
 from app.integrations.workforce.mock import MockWorkforceAdapter
 from app.services.orchestrator import RescueOrchestrator
+from app.workers.celery_scheduler import CeleryScheduler
 from app.workers.scheduler import SimScheduler
 
 logger = structlog.get_logger(__name__)
+
+# Timer backends (spec §7.3): the broker owns production timers; the in-memory
+# scheduler remains for single-process local runs, tests and the eval harness.
+Scheduler = SimScheduler | CeleryScheduler
 
 
 @dataclass(frozen=True)
@@ -32,8 +37,8 @@ class RescueRuntime:
     session_factory: async_sessionmaker[AsyncSession]
     channel: TwilioWhatsAppChannel
     workforce: MockWorkforceAdapter
-    clock: SystemClock
-    scheduler: SimScheduler
+    clock: Clock
+    scheduler: Scheduler
     orchestrator: RescueOrchestrator
     interpreter: MessageInterpreter | None
 
@@ -74,8 +79,15 @@ class RescueRuntime:
         return True
 
 
-def build_runtime(settings: Settings) -> RescueRuntime:
-    """Construct the full rescue runtime exactly as the API service did."""
+def build_runtime(settings: Settings, *, scheduler: Scheduler | None = None) -> RescueRuntime:
+    """Construct the full rescue runtime exactly as the API service did.
+
+    The scheduler backend is injectable so tests and the eval harness keep
+    full control (`ShiftRescueTarget` builds `RescueRuntime` with a
+    `SimScheduler`); otherwise `settings.scheduler_backend` picks it: the
+    broker-backed `CeleryScheduler` in production, `SimScheduler` for the
+    single-process `memory` backend.
+    """
     # Pass the database URL explicitly: falling back to the ambient settings
     # would make the runtime silently ignore the settings it was given (and
     # connect to a developer's local database from tests).
@@ -86,9 +98,28 @@ def build_runtime(settings: Settings) -> RescueRuntime:
         auth_token=settings.twilio_auth_token,
         from_number=settings.twilio_whatsapp_from,
     )
-    scheduler = SimScheduler()
+    # Demo environments share one Redis-backed offset (spec §7.5, decision 3):
+    # the API's `/dev/clock/advance` moves it and this worker follows. Redis
+    # clients connect lazily, so building it here stays hermetic; a read
+    # failure inside `DemoClock.now()` degrades to real time with a warning.
+    clock: Clock
+    if settings.demo_clock_enabled:
+        from redis import Redis
+
+        clock = DemoClock(redis_offset_source(Redis.from_url(settings.redis_url)))
+    else:
+        clock = SystemClock()
+    if scheduler is None:
+        backend = settings.scheduler_backend
+        if backend == "celery":
+            scheduler = CeleryScheduler(clock)
+        elif backend == "memory":
+            scheduler = SimScheduler()
+        else:
+            raise ValueError(
+                f"Unknown scheduler_backend '{backend}' (expected 'celery' or 'memory')"
+            )
     workforce = MockWorkforceAdapter(session_factory)
-    clock = SystemClock()
     interpreter = build_interpreter(settings)
     orchestrator = RescueOrchestrator(
         session_factory=session_factory,

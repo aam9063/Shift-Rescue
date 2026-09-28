@@ -1,8 +1,13 @@
-"""Golden-set eval runner (spec §8.1).
+"""Golden-set and scenario eval runner (spec §8).
 
 Usage:
   uv run python evals/runner.py --provider parser        # offline baseline
   uv run python evals/runner.py --provider interpreter   # real model via app.agent.factory (OPENAI_API_KEY by default)
+  uv run python evals/runner.py --scenarios              # YAML scenario suite (spec §8.2), headless
+
+Every execution records one `eval_run` row (feature evals-live) so the
+dashboard's Evals screen shows the real numbers. The trigger comes from
+`EVAL_TRIGGER` (`ci` when set, `manual` otherwise).
 
 The parser baseline is informational: it measures the degraded-mode floor.
 Threshold checks only block when a real model is evaluated.
@@ -23,6 +28,10 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.agent.interpreter import PROMPT_VERSION  # noqa: E402
 from app.domain.parser import Intent, parse_message  # noqa: E402
+from app.evals.recording import (  # noqa: E402
+    record_golden_run,
+    record_scenario_run,
+)
 from app.evals.thresholds import check_thresholds, load_thresholds  # noqa: E402
 
 
@@ -188,10 +197,49 @@ def git_sha() -> str:
         return "unknown"
 
 
+SCENARIOS = Path(__file__).parent / "scenarios"
+
+
+async def run_scenario_suite() -> tuple[list[dict], str, str]:
+    """Execute the YAML scenario suite headlessly (spec §8.2).
+
+    Reuses the production harness (`app.evals.runner.run_scenario` over
+    `evals/scenarios/*.yaml`) — the same code the pytest suite runs — instead
+    of reimplementing it. Returns the per-scenario reports, the git sha and
+    the interpreter prompt version (aggregation/recording happen in `main`).
+    """
+    from app.evals.runner import run_scenario as run_scenario_harness
+
+    try:
+        from yaml import safe_load
+    except ImportError as error:  # PyYAML is not a declared backend dependency
+        raise SystemExit(
+            "PyYAML is required for --scenarios; run from the backend venv: "
+            "cd backend && uv run python ../evals/runner.py --scenarios"
+        ) from error
+
+    results: list[dict] = []
+    for path in sorted(SCENARIOS.glob("*.yaml")):
+        spec = safe_load(path.read_text(encoding="utf8"))
+        result = await run_scenario_harness(spec)
+        results.append(result)
+        verdict = "PASS" if result["expectations_passed"] else "FAIL"
+        print(f"  {result['scenario']}: {verdict}")
+    return results, git_sha(), PROMPT_VERSION
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--provider", choices=["parser", "interpreter"], default="parser")
+    parser.add_argument(
+        "--scenarios",
+        action="store_true",
+        help="run the YAML scenario suite (spec §8.2) instead of the golden set",
+    )
     args = parser.parse_args()
+
+    if args.scenarios:
+        return await run_and_record_scenarios()
 
     if args.provider == "interpreter":
         try:
@@ -201,6 +249,7 @@ async def main() -> int:
             return 2
     else:
         provider = ParserProvider()
+    started_at = datetime.now(UTC)
     report = await run(provider)
     report.update(
         {
@@ -212,9 +261,8 @@ async def main() -> int:
 
     REPORTS.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    (REPORTS / f"interpreter_{args.provider}_{stamp}.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8"
-    )
+    report_path = REPORTS / f"interpreter_{args.provider}_{stamp}.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8")
 
     print(f"Provider : {report['provider']}")
     print(f"Samples  : {report['total']}")
@@ -222,6 +270,16 @@ async def main() -> int:
     print(f"Health   : {report['health_detection']}")
     print(f"Times    : {report['conditional_time_accuracy']}")
     print(f"Failures : {len(report['failures'])} (first 50 kept in report)")
+
+    run_id = await record_golden_run(
+        report,
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+        thresholds_enforced=args.provider != "parser",
+        report_path=str(report_path),
+        prompt_version=PROMPT_VERSION,
+    )
+    _print_recorded(run_id)
 
     if args.provider != "parser":
         violations = check_thresholds(report, load_thresholds())
@@ -232,6 +290,56 @@ async def main() -> int:
     else:
         print("Baseline run: thresholds not applied (informational).")
     return 0
+
+
+def _print_recorded(run_id: str | None) -> None:
+    """One line saying the run was recorded (with its id), or the honest
+    failure line — recording is best-effort and never breaks the run."""
+    if run_id is not None:
+        print(f"Recorded eval run {run_id}")
+    else:
+        print("Eval run not recorded (recording failed; see API logs)", file=sys.stderr)
+
+
+async def run_and_record_scenarios() -> int:
+    """Run the scenario suite and record one eval_run row for the suite."""
+    print(f"Scenarios ({len(list(SCENARIOS.glob('*.yaml')))} files):")
+    started_at = datetime.now(UTC)
+    results, sha, prompt_version = await run_scenario_suite()
+    finished_at = datetime.now(UTC)
+
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    stamp = finished_at.strftime("%Y%m%d_%H%M%S")
+    report_path = REPORTS / f"scenarios_{stamp}.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "git_sha": sha,
+                "ran_at": finished_at.isoformat(),
+                "prompt_version": prompt_version,
+                "results": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
+        encoding="utf8",
+    )
+
+    passed = sum(1 for result in results if result["expectations_passed"])
+    violations = sum(len(result["invariant_violations"]) for result in results)
+    print(f"Scenarios: {passed}/{len(results)} passed, {violations} invariant violations")
+
+    run_id = await record_scenario_run(
+        results,
+        started_at=started_at,
+        finished_at=finished_at,
+        git_sha=sha,
+        report_path=str(report_path),
+        prompt_version=prompt_version,
+    )
+    _print_recorded(run_id)
+    return 0 if passed == len(results) and violations == 0 else 1
 
 
 if __name__ == "__main__":

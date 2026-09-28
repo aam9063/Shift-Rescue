@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   AGENT_DECISIONS,
@@ -7,51 +8,95 @@ import {
   EVAL_RUN,
   OPS_METRICS,
   type AgentDecision,
+  type ChatMessage,
   type Conversation,
-  type EvalRunSummary,
   type LocationSettings,
   type OpsMetrics,
   type SystemStatus,
   systemStatusSource,
 } from './dashboardMock'
+import {
+  advanceDemoClock,
+  fetchActiveRescues,
+  fetchAgentDecisions,
+  fetchConversationThread,
+  fetchConversations,
+  fetchDemoClock,
+  fetchEvalSummary,
+  fetchOpsMetrics,
+  fetchRescueDetail,
+  fetchSettings,
+  fetchSimulatorEmployees,
+  fetchSystemStatus,
+  resetDemoClock,
+  resetDemoData,
+  saveSettings,
+  sendSimulatorMessage,
+  type EvalRunSummaryLive,
+} from './api'
+import { isMockMode } from './dataSource'
+import type { SimulatorEmployee } from '../domain/types'
 
 /**
- * Mock-backed dashboard data (mockups in public/img). Later slices swap this
- * module for the REST API client; components only consume these hooks.
+ * Second data layer hooks (conversations, agent decisions, Ops metrics,
+ * settings, system status). Live data comes from the API; in mock mode the
+ * `dashboardMock` constants keep the screens working offline and hermetic in
+ * tests. Query keys and result shapes stay compatible with the screens.
  */
+
+const LIVE_STALE_TIME_MS = 30_000
+
+// --- Agent reply poll (feature manager-can-act T1) ---------------------------
+
+const REPLY_POLL_INTERVAL_MS = 3_000
+/** 10 attempts x 3 s: the agent answers in 10-15 s; never poll forever. */
+const REPLY_POLL_MAX_ATTEMPTS = 10
 
 export function useConversations(): { conversations: Conversation[] } {
   const query = useQuery({
     queryKey: ['conversations'],
-    queryFn: async () => CONVERSATIONS,
-    staleTime: Infinity,
+    queryFn: isMockMode() ? async () => CONVERSATIONS : fetchConversations,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
   return { conversations: query.data ?? [] }
 }
 
-export function useAgentDecisions(): { decisions: AgentDecision[] } {
+export function useAgentDecisions(): {
+  decisions: AgentDecision[]
+  error: unknown
+  isLoading: boolean
+} {
   const query = useQuery({
     queryKey: ['agent-decisions'],
-    queryFn: async () => AGENT_DECISIONS,
-    staleTime: Infinity,
+    queryFn: isMockMode() ? async () => AGENT_DECISIONS : fetchAgentDecisions,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
-  return { decisions: query.data ?? [] }
+  // The endpoint is operator-only (spec §7.5), so a manager gets a 403 here:
+  // the screen must say so instead of rendering an empty table that looks broken.
+  return { decisions: query.data ?? [], error: query.error, isLoading: query.isLoading }
 }
 
-export function useEvalRun(): { evalRun: EvalRunSummary | undefined } {
+export function useEvalRun(): {
+  evalRun: EvalRunSummaryLive | undefined
+  error: unknown
+  isLoading: boolean
+} {
+  const mockMode = isMockMode()
   const query = useQuery({
     queryKey: ['eval-run'],
-    queryFn: async () => EVAL_RUN,
-    staleTime: Infinity,
+    // Live: the recorded-runs summary (operator-only). Mock mode keeps the
+    // offline fixture alive; it always has data, so `hasRuns` is always true.
+    queryFn: mockMode ? async () => ({ ...EVAL_RUN, hasRuns: true }) : fetchEvalSummary,
+    staleTime: mockMode ? Infinity : LIVE_STALE_TIME_MS,
   })
-  return { evalRun: query.data }
+  return { evalRun: query.data, error: query.error, isLoading: query.isLoading }
 }
 
 export function useOpsMetrics(): { metrics: OpsMetrics | undefined } {
   const query = useQuery({
     queryKey: ['ops-metrics'],
-    queryFn: async () => OPS_METRICS,
-    staleTime: Infinity,
+    queryFn: isMockMode() ? async () => OPS_METRICS : fetchOpsMetrics,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
   })
   return { metrics: query.data }
 }
@@ -62,13 +107,16 @@ export function useSettings(): {
   saved: boolean
 } {
   const queryClient = useQueryClient()
+  const mockMode = isMockMode()
   const query = useQuery({
     queryKey: ['settings'],
-    queryFn: async () => DEFAULT_SETTINGS,
-    staleTime: Infinity,
+    queryFn: mockMode ? async () => DEFAULT_SETTINGS : fetchSettings,
+    staleTime: mockMode ? Infinity : LIVE_STALE_TIME_MS,
   })
   const mutation = useMutation({
-    mutationFn: async (next: LocationSettings) => next,
+    mutationFn: mockMode
+      ? async (next: LocationSettings) => next
+      : async (next: LocationSettings) => saveSettings(next),
     onSuccess: (saved) => {
       queryClient.setQueryData(['settings'], saved)
     },
@@ -83,8 +131,398 @@ export function useSettings(): {
 export function useSystemStatus(): { status: SystemStatus | undefined } {
   const query = useQuery({
     queryKey: ['system-status'],
-    queryFn: () => systemStatusSource.get(),
+    // `/api/status` is public, so the degraded banner works pre-login too.
+    queryFn: isMockMode() ? () => systemStatusSource.get() : fetchSystemStatus,
     staleTime: 0,
   })
   return { status: query.data }
+}
+
+// --- Demo simulator (spec §7.6): real roster, threads and shared clock -------
+
+/** The roster behind `VITE_USE_MOCK`: the mock conversations, mapped. */
+function mockEmployees(): SimulatorEmployee[] {
+  return CONVERSATIONS.map((conversation) => ({
+    id: conversation.employeeId,
+    displayName: conversation.employeeName,
+    roles: [],
+    shiftStartsAt: null,
+    shiftEndsAt: null,
+    shiftStatus: null,
+    conversationId: conversation.employeeId,
+  }))
+}
+
+export function useDemoEmployees(): { employees: SimulatorEmployee[] } {
+  const query = useQuery({
+    queryKey: ['demo-employees'],
+    queryFn: isMockMode() ? mockEmployees : fetchSimulatorEmployees,
+    staleTime: isMockMode() ? Infinity : LIVE_STALE_TIME_MS,
+  })
+  return { employees: query.data ?? [] }
+}
+
+export function useDemoThread(conversationId: string | null): { messages: ChatMessage[] } {
+  const mockMode = isMockMode()
+  const query = useQuery({
+    queryKey: ['demo-thread', conversationId],
+    queryFn: mockMode
+      ? async () => CONVERSATIONS.find((c) => c.employeeId === conversationId)?.messages ?? []
+      : () => fetchConversationThread(conversationId as string),
+    enabled: conversationId !== null,
+    staleTime: mockMode ? Infinity : LIVE_STALE_TIME_MS,
+  })
+  return { messages: query.data ?? [] }
+}
+
+/** The demo clock (spec §7.5): the shared virtual time, advanced in Redis in
+ * live mode and locally in mock mode. The UI states the honest limitation:
+ * broker timers keep their real-time ETA. `reset` zeroes the offset — a
+ * leftover advance silently moves "now" for the whole worker. */
+export function useDemoClock(): {
+  time: string | undefined
+  offsetSeconds: number | undefined
+  /** True when the last advance was cut at the backend's ±6 h demo bound. */
+  clamped: boolean
+  /** Virtual "now" as a Date, for computing roster situations. */
+  virtualNow: Date | undefined
+  advance: (seconds: number) => void
+  reset: () => void
+  isAdvancing: boolean
+} {
+  const queryClient = useQueryClient()
+  const mockMode = isMockMode()
+  const [mockTime, setMockTime] = useState('15:11')
+  const query = useQuery({
+    queryKey: ['demo-clock'],
+    queryFn: fetchDemoClock,
+    enabled: !mockMode,
+    staleTime: 0,
+  })
+  const invalidateBoards = () => {
+    // Deadlines and escalations moved: the Today board and every thread
+    // reflect the new virtual time on the next render.
+    void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+    void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+    void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+  }
+  const advanceMutation = useMutation({
+    mutationFn: (seconds: number) => advanceDemoClock(seconds),
+    onSuccess: (clock) => {
+      queryClient.setQueryData(['demo-clock'], clock)
+      invalidateBoards()
+    },
+  })
+  const resetMutation = useMutation({
+    mutationFn: () => resetDemoClock(),
+    onSuccess: (clock) => {
+      queryClient.setQueryData(['demo-clock'], clock)
+      invalidateBoards()
+    },
+  })
+  const advance = (seconds: number) => {
+    if (mockMode) {
+      setMockTime((current) => {
+        const [h, m] = current.split(':').map(Number)
+        const total = h * 60 + m + Math.round(seconds / 60)
+        return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+      })
+      return
+    }
+    advanceMutation.mutate(seconds)
+  }
+  const reset = () => {
+    if (mockMode) {
+      // Back to the documented mock demo time.
+      setMockTime('15:11')
+      return
+    }
+    resetMutation.mutate()
+  }
+  return {
+    time: mockMode ? mockTime : (query.data ? formatVirtualTime(query.data.now) : undefined),
+    offsetSeconds: mockMode ? 0 : query.data?.offsetSeconds,
+    clamped: mockMode ? false : (query.data?.clamped ?? false),
+    virtualNow: query.data ? new Date(query.data.now) : undefined,
+    advance,
+    reset,
+    isAdvancing: advanceMutation.isPending || resetMutation.isPending,
+  }
+}
+
+export function useSendDemoMessage(): {
+  send: (employeeId: string, conversationId: string | null, text: string) => void
+  isPending: boolean
+  /** Conversation whose agent reply is being polled; drives the
+   * "the agent is replying…" line and the disabled send control. */
+  replyingTo: string | null
+} {
+  const queryClient = useQueryClient()
+  const mockMode = isMockMode()
+  const [replyingTo, setReplyingTo] = useState<string | null>(null)
+  const pollRef = useRef<{ cancelled: boolean; timer?: ReturnType<typeof setTimeout> } | null>(null)
+
+  useEffect(() => {
+    // Unmount: stop the reply poll — it must never setState afterwards.
+    return () => {
+      const poll = pollRef.current
+      if (poll !== null) {
+        poll.cancelled = true
+        if (poll.timer !== undefined) {
+          clearTimeout(poll.timer)
+        }
+        pollRef.current = null
+      }
+    }
+  }, [])
+
+  const startReplyPoll = (conversationId: string) => {
+    // Baseline: the outbound messages the thread already had when the
+    // employee sent. The reply is any assistant message beyond it.
+    const baseline = (queryClient.getQueryData<ChatMessage[]>(['demo-thread', conversationId]) ?? [])
+      .filter((message) => message.from === 'assistant').length
+    const poll: { cancelled: boolean; timer?: ReturnType<typeof setTimeout> } = { cancelled: false }
+    pollRef.current = poll
+    setReplyingTo(conversationId)
+    let attempts = 0
+    const stop = () => {
+      poll.cancelled = true
+      pollRef.current = null
+      setReplyingTo(null)
+    }
+    const tick = async () => {
+      if (poll.cancelled) {
+        return
+      }
+      try {
+        const messages = await fetchConversationThread(conversationId)
+        if (messages.filter((message) => message.from === 'assistant').length > baseline) {
+          // The agent replied: surface it and refresh every board it moves.
+          void queryClient.invalidateQueries({ queryKey: ['demo-thread', conversationId] })
+          void queryClient.invalidateQueries({ queryKey: ['demo-employees'] })
+          void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+          void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+          stop()
+          return
+        }
+      } catch {
+        // Transient fetch failure: keep polling until the bound.
+      }
+      attempts += 1
+      if (attempts >= REPLY_POLL_MAX_ATTEMPTS) {
+        stop() // bound reached: stop waiting, the thread refetches on visit
+        return
+      }
+      poll.timer = setTimeout(() => {
+        void tick()
+      }, REPLY_POLL_INTERVAL_MS)
+    }
+    poll.timer = setTimeout(() => {
+      void tick()
+    }, REPLY_POLL_INTERVAL_MS)
+  }
+
+  const mutation = useMutation({
+    mutationFn: ({
+      employeeId,
+      text,
+    }: {
+      employeeId: string
+      conversationId: string | null
+      text: string
+    }) => sendSimulatorMessage(employeeId, text),
+    onSuccess: (_sid, variables) => {
+      // The worker applies the message: refetch the thread, the roster (the
+      // conversation id appears on first contact) and the Today board.
+      if (variables.conversationId) {
+        void queryClient.invalidateQueries({
+          queryKey: ['demo-thread', variables.conversationId],
+        })
+        // The agent's answer takes 10-15 s: poll until it lands so the reply
+        // shows up without a manual reload (feature manager-can-act T1).
+        startReplyPoll(variables.conversationId)
+      }
+      void queryClient.invalidateQueries({ queryKey: ['demo-employees'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+      void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+    },
+  })
+  const send = (employeeId: string, conversationId: string | null, text: string) => {
+    if (mockMode) {
+      // Offline demo: append locally so the thread still feels alive.
+      queryClient.setQueryData<ChatMessage[]>(
+        ['demo-thread', conversationId],
+        (current) => [...(current ?? []), { from: 'employee', text }],
+      )
+      return
+    }
+    mutation.mutate({ employeeId, conversationId, text })
+  }
+  return { send, isPending: mutation.isPending, replyingTo }
+}
+
+/** The demo clock is UTC; show HH:MM without a timezone debate. */
+function formatVirtualTime(iso: string): string {
+  return iso.slice(11, 16)
+}
+
+/** What one demo reset removed (the endpoint's honest summary). */
+export interface DemoResetSummary {
+  deleted: Record<string, number>
+  now: string
+  offsetSeconds: number
+}
+
+/** One-click demo reset (Simulator, "Reset demo data"): deletes every
+ * rescue, message and offer of the demo, reseeds the day and puts the demo
+ * clock back on real time — the backend answers what it removed, and every
+ * board refetches so the screen reads the clean state immediately. In mock
+ * mode there is nothing stored to delete; the demo data is in-memory. */
+export function useDemoDataReset(): {
+  reset: () => void
+  isPending: boolean
+  summary: DemoResetSummary | null
+} {
+  const queryClient = useQueryClient()
+  const mockMode = isMockMode()
+  const [mockSummary, setMockSummary] = useState<DemoResetSummary | null>(null)
+  const mutation = useMutation({
+    mutationFn: () => resetDemoData(),
+    onSuccess: (summary) => {
+      queryClient.setQueryData(['demo-clock'], {
+        now: summary.now,
+        offsetSeconds: summary.offsetSeconds,
+        clamped: false,
+      })
+      // Everything the reset touches: the board, the roster, the threads,
+      // the scenario and the clock all refetch from the reseeded state.
+      void queryClient.invalidateQueries()
+    },
+  })
+  const reset = () => {
+    if (mockMode) {
+      setMockSummary({ deleted: {}, now: new Date().toISOString(), offsetSeconds: 0 })
+      return
+    }
+    mutation.mutate()
+  }
+  return {
+    reset,
+    isPending: mutation.isPending,
+    summary: mockMode ? mockSummary : (mutation.data ?? null),
+  }
+}
+
+// --- Acceptance-race scenario (spec §7.6): the honest concurrency demo -------
+
+/** What the demo employees reply to accept: the same answer the
+ * acceptance-race integration test uses, so the agent reads an acceptance. */
+const SCENARIO_ACCEPTANCE_TEXT = 'sí'
+
+const SCENARIO_READY_HINT =
+  'Watch the Today board: exactly one candidate keeps the shift and the other is told it is already covered.'
+
+const SCENARIO_DONE_MESSAGE =
+  'Done: one candidate should now hold the shift; the other was told it is already covered.'
+
+type ScenarioTarget =
+  | { problem: string }
+  | { rescueId: string; candidates: { employeeId: string; employeeName: string }[] }
+
+export type ScenarioStatus = 'loading' | 'ready' | 'running' | 'unavailable'
+
+/**
+ * The "two candidates accept at once" demo: it fires both acceptance messages
+ * concurrently, so the orchestrator's single-winner invariant is actually
+ * exercised on screen instead of described. It finds the active OFFERING
+ * rescue with at least two pending offers; anything else is reported
+ * honestly instead of silently doing nothing.
+ */
+export function useAcceptanceRaceScenario(): {
+  status: ScenarioStatus
+  message: string
+  run: () => void
+} {
+  const queryClient = useQueryClient()
+  const mockMode = isMockMode()
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const query = useQuery({
+    queryKey: ['demo-scenario'],
+    queryFn: async (): Promise<ScenarioTarget> => {
+      const rescues = await fetchActiveRescues()
+      const offering = rescues.find((rescue) => rescue.status === 'OFFERING')
+      if (!offering) {
+        return { problem: 'No active rescue is offering right now: open a rescue first.' }
+      }
+      const detail = await fetchRescueDetail(offering.id)
+      const candidates = detail.offers
+        .filter((offer) => offer.status === 'PENDING' && offer.employeeId)
+        .map((offer) => ({
+          employeeId: offer.employeeId as string,
+          employeeName: offer.employeeName,
+        }))
+      if (candidates.length < 2) {
+        return {
+          problem: 'The offering rescue has fewer than two pending offers to race.',
+        }
+      }
+      return { rescueId: offering.id, candidates: candidates.slice(0, 2) }
+    },
+    enabled: !mockMode,
+    staleTime: LIVE_STALE_TIME_MS,
+  })
+
+  const target = query.data
+  let status: ScenarioStatus
+  let message: string
+  if (mockMode) {
+    status = 'unavailable'
+    message = 'The scenario runs in live mode: start the stack and open this screen again.'
+  } else if (running) {
+    status = 'running'
+    message = 'Both candidates are answering at the same time…'
+  } else if (result !== null) {
+    status = 'unavailable'
+    message = result
+  } else if (query.isPending) {
+    status = 'loading'
+    message = ''
+  } else if (target !== undefined && 'problem' in target) {
+    status = 'unavailable'
+    message = target.problem
+  } else {
+    status = 'ready'
+    message = SCENARIO_READY_HINT
+  }
+
+  const run = () => {
+    if (mockMode || running || target === undefined || 'problem' in target) {
+      return
+    }
+    setRunning(true)
+    setResult(null)
+    // Both sends fire together: awaiting the first before starting the second
+    // would decide the winner by order and make the race meaningless.
+    void Promise.allSettled(
+      target.candidates.map((candidate) =>
+        sendSimulatorMessage(candidate.employeeId, SCENARIO_ACCEPTANCE_TEXT),
+      ),
+    ).then(() => {
+      setRunning(false)
+      setResult(SCENARIO_DONE_MESSAGE)
+      // The worker settled the race: every board that shows its outcome
+      // refetches, and the scenario re-evaluates the (now settled) rescue.
+      void queryClient.invalidateQueries({ queryKey: ['rescues'] })
+      void queryClient.invalidateQueries({ queryKey: ['shifts'] })
+      void queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['demo-scenario'] })
+    })
+  }
+
+  return { status, message, run }
 }

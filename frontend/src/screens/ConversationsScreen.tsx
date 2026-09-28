@@ -31,7 +31,35 @@ export function ConversationsScreen() {
         Conversations
       </h1>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="rounded-card bg-surface px-4 py-2 shadow-card lg:col-span-2">
+        <ul aria-label="Conversations" className="space-y-3 md:hidden">
+          {conversations.map((conversation) => (
+            <li key={conversation.employeeId}>
+              <button
+                type="button"
+                onClick={() => setSelectedId(conversation.employeeId)}
+                className={`w-full cursor-pointer rounded-card bg-surface px-4 py-3 text-left shadow-card transition-colors hover:bg-neutral-cool focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-accent ${
+                  selectedId === conversation.employeeId ? 'bg-green-light/40' : ''
+                }`}
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="text-sm font-semibold tracking-tight">
+                    {conversation.employeeName}
+                  </p>
+                  <IntentLabel intent={conversation.intent} />
+                </div>
+                <p className="mt-1 text-sm tracking-tight text-text-secondary">
+                  {conversation.lastMessage}
+                </p>
+                <p className="mt-1 text-sm text-text-secondary">{conversation.rescueLabel}</p>
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div
+          data-testid="conversations-table"
+          className="hidden overflow-x-auto rounded-card bg-surface px-4 py-2 shadow-card md:block lg:col-span-2"
+        >
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-black/5 text-xs uppercase tracking-wider text-text-secondary">

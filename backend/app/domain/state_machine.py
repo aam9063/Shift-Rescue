@@ -78,6 +78,12 @@ _TRANSITIONS: dict[tuple[State, StateMachineEvent], TransitionResult] = {
         State.ESCALATED,
         (SideEffect.NOTIFY_MANAGER,),
     ),
+    # §5.4/§5.5: una ausencia sin confirmar nunca se da por hecha en silencio;
+    # al vencer el plazo del rescate, el caso se escala al manager.
+    (State.OPEN, StateMachineEvent.DEADLINE_REACHED): TransitionResult(
+        State.ESCALATED,
+        (SideEffect.NOTIFY_MANAGER,),
+    ),
     # OFFERING
     (State.OFFERING, StateMachineEvent.UNCONDITIONAL_ACCEPT): TransitionResult(
         State.COVERED,
