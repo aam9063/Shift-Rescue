@@ -264,7 +264,9 @@ export function SimulatorScreen() {
       )}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {roster.slice(0, 3).map(({ employee, situation }) => (
+        {/* The whole roster: slicing it to three hid every employee whose shift
+            starts later, which is the calmest way to run the demo. */}
+        {roster.map(({ employee, situation }) => (
           <EmployeePhone key={employee.id} employee={employee} situation={situation} />
         ))}
       </div>
