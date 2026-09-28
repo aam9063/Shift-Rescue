@@ -30,7 +30,7 @@ Every `/api` route except `POST /api/auth/login` requires a bearer token
 # 1. Login (12-hour token, JWT_EXPIRES_MINUTES).
 TOKEN=$(curl -fsS https://<domain>/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"manager@laterraza.demo","password":"laterraza-demo-2026"}' \
+  -d "{\"email\":\"$DEMO_EMAIL\",\"password\":\"$DEMO_PASSWORD\"}" \
   | python -c 'import json,sys; print(json.load(sys.stdin)["accessToken"])')
 
 # 2. Call any dashboard endpoint with the token.

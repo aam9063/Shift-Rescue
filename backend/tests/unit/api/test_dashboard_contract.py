@@ -6,6 +6,7 @@ missing keys fail.
 """
 
 
+from app.db.seed import DEMO_PASSWORD
 from tests.conftest import (
     CONVERSATION_ID,
     INTERPRETATION_ID,
@@ -133,7 +134,7 @@ def assert_keys(payload: dict | list, expected: set, path: str = "$") -> None:
 
 async def test_login_contract(client) -> None:
     response = await client.post(
-        "/api/auth/login", json={"email": "manager@test.demo", "password": "laterraza-demo-2026"}
+        "/api/auth/login", json={"email": "manager@test.demo", "password": DEMO_PASSWORD}
     )
     assert response.status_code == 200
     body = response.json()

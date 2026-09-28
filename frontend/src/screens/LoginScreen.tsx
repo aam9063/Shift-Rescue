@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { login } from '../services/auth'
 import { ApiError, NetworkError } from '../services/apiClient'
 import { Button } from '../components/ui/Button'
+import { DEMO_EMAIL, DEMO_PASSWORD } from '../domain/demoCredentials'
 
 /**
  * Login screen for the manager dashboard (spec §7.5). Single email/password
@@ -9,9 +10,6 @@ import { Button } from '../components/ui/Button'
  * reviewers and distinct messages for wrong credentials vs. an unreachable
  * server. Credentials are never logged.
  */
-
-const DEMO_EMAIL = 'manager@laterraza.demo'
-const DEMO_PASSWORD = 'laterraza-demo-2026'
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 401) {

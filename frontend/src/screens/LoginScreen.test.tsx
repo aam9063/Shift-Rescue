@@ -2,6 +2,7 @@ import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderWithProviders } from '../test/renderWithProviders'
+import { DEMO_EMAIL, DEMO_PASSWORD } from '../domain/demoCredentials'
 import { LoginScreen } from './LoginScreen'
 import { clearSession, getSession } from '../services/auth'
 
@@ -12,7 +13,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const MANAGER = {
   id: 'mgr_1',
   name: 'Demo Manager',
-  email: 'manager@laterraza.demo',
+  email: DEMO_EMAIL,
   role: 'manager',
   locationIds: ['loc_la_terraza'],
 }
@@ -32,8 +33,8 @@ describe('LoginScreen', () => {
     const user = userEvent.setup()
 
     renderWithProviders(<LoginScreen onLogin={onLogin} />)
-    await user.type(screen.getByLabelText('Email'), 'manager@laterraza.demo')
-    await user.type(screen.getByLabelText('Password'), 'laterraza-demo-2026')
+    await user.type(screen.getByLabelText('Email'), DEMO_EMAIL)
+    await user.type(screen.getByLabelText('Password'), DEMO_PASSWORD)
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
 
     expect(await screen.findByRole('heading', { name: 'Manager sign in' })).toBeInTheDocument()
@@ -41,8 +42,8 @@ describe('LoginScreen', () => {
     expect(url).toBe('/api/auth/login')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body as string)).toEqual({
-      email: 'manager@laterraza.demo',
-      password: 'laterraza-demo-2026',
+      email: DEMO_EMAIL,
+      password: DEMO_PASSWORD,
     })
     expect(getSession()?.accessToken).toBe('token-abc')
     expect(getSession()?.manager.role).toBe('manager')
@@ -54,7 +55,7 @@ describe('LoginScreen', () => {
     const user = userEvent.setup()
 
     renderWithProviders(<LoginScreen />)
-    await user.type(screen.getByLabelText('Email'), 'manager@laterraza.demo')
+    await user.type(screen.getByLabelText('Email'), DEMO_EMAIL)
     await user.type(screen.getByLabelText('Password'), 'wrong-password')
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
 
@@ -67,8 +68,8 @@ describe('LoginScreen', () => {
     const user = userEvent.setup()
 
     renderWithProviders(<LoginScreen />)
-    await user.type(screen.getByLabelText('Email'), 'manager@laterraza.demo')
-    await user.type(screen.getByLabelText('Password'), 'laterraza-demo-2026')
+    await user.type(screen.getByLabelText('Email'), DEMO_EMAIL)
+    await user.type(screen.getByLabelText('Password'), DEMO_PASSWORD)
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -80,6 +81,6 @@ describe('LoginScreen', () => {
   it('shows the demo credentials for the reviewer', () => {
     renderWithProviders(<LoginScreen />)
     expect(screen.getByText(/manager@laterraza\.demo/)).toBeInTheDocument()
-    expect(screen.getByText(/laterraza-demo-2026/)).toBeInTheDocument()
+    expect(screen.getByText(new RegExp(DEMO_PASSWORD))).toBeInTheDocument()
   })
 })

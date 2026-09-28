@@ -209,7 +209,7 @@ async def test_clock_advance_moves_the_offset_and_enqueues_the_sweep(
     assert stub_sweep.calls == [()]
 
 
-async def test_clock_advance_accepts_negative_seconds(dev_client, fake_redis) -> None:
+async def test_clock_advance_accepts_negative_seconds(dev_client, fake_redis, stub_sweep) -> None:
     response = await dev_client.post(
         "/dev/clock/advance", json={"seconds": -120}, headers=auth_headers()
     )
@@ -224,7 +224,7 @@ async def test_clock_advance_accepts_negative_seconds(dev_client, fake_redis) ->
 
 
 async def test_clock_advance_clamps_the_total_offset_at_the_demo_bound(
-    dev_client, fake_redis
+    dev_client, fake_redis, stub_sweep
 ) -> None:
     # The observed failure this prevents: repeated +1h clicks left the clock
     # +40 h ahead and every shift of the day read as finished. The total is
@@ -242,7 +242,9 @@ async def test_clock_advance_clamps_the_total_offset_at_the_demo_bound(
     assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == str(6 * 3600)
 
 
-async def test_clock_advance_clamps_a_single_huge_request(dev_client, fake_redis) -> None:
+async def test_clock_advance_clamps_a_single_huge_request(
+    dev_client, fake_redis, stub_sweep
+) -> None:
     response = await dev_client.post(
         "/dev/clock/advance", json={"seconds": 40 * 3600}, headers=auth_headers()
     )
@@ -253,7 +255,9 @@ async def test_clock_advance_clamps_a_single_huge_request(dev_client, fake_redis
     assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == str(6 * 3600)
 
 
-async def test_clock_advance_within_the_bound_is_not_clamped(dev_client, fake_redis) -> None:
+async def test_clock_advance_within_the_bound_is_not_clamped(
+    dev_client, fake_redis, stub_sweep
+) -> None:
     response = await dev_client.post(
         "/dev/clock/advance", json={"seconds": 3600}, headers=auth_headers()
     )
@@ -264,7 +268,9 @@ async def test_clock_advance_within_the_bound_is_not_clamped(dev_client, fake_re
     assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == "3600"
 
 
-async def test_clock_advance_clamps_on_the_negative_side(dev_client, fake_redis) -> None:
+async def test_clock_advance_clamps_on_the_negative_side(
+    dev_client, fake_redis, stub_sweep
+) -> None:
     response = await dev_client.post(
         "/dev/clock/advance", json={"seconds": -40 * 3600}, headers=auth_headers()
     )
