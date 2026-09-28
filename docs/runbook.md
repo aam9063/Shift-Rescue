@@ -345,6 +345,40 @@ backend (`SCHEDULER_BACKEND=memory`, for a single-process local run) and
 refreshes the API status snapshot. `SCHEDULER_BACKEND=celery` is the
 production default.
 
+### Record an eval run and see it in the dashboard
+
+Every evaluation run records itself in the `eval_run` table (feature
+evals-live) and the Evals screen (and `GET /api/evals/runs*`, operator role)
+show exactly those rows — nothing in the screen is invented.
+
+```bash
+# Golden set (real model; needs the provider key, see §2.1).
+# From the repo root; the runner reuses the backend venv.
+cd backend && uv run python ../evals/runner.py --provider interpreter
+
+# Offline parser baseline (informational; thresholds are not applied).
+cd backend && uv run python ../evals/runner.py --provider parser
+
+# Scenario suite (§8.2): per-scenario pass/fail + invariant violations.
+cd backend && uv run python ../evals/runner.py --scenarios
+```
+
+Each execution prints one line with the recorded run id (`Recorded eval run
+<id>`) and writes the full JSON report under `evals/reports/` (gitignored);
+the row points at it via `report_path`. A run that misses its thresholds is
+still recorded, with `passed: false` — the screen shows it as failing.
+Recording is best-effort: if the database is unreachable the run finishes
+anyway and the failure is only logged (`eval_run_record_failed`).
+
+In CI set `EVAL_TRIGGER=ci` so the row records `trigger: ci` instead of the
+default `manual`.
+
+Then open the dashboard: the Evals screen reads
+`GET /api/evals/runs/summary` (operator role — use the operator account).
+With no recorded runs the screen shows an honest empty state naming the
+command above; the mock fixture stays available offline behind
+`VITE_USE_MOCK=true`.
+
 ## 6. Incident playbook
 
 | Symptom | First checks | Fix |

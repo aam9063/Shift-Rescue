@@ -92,12 +92,16 @@ describe('App shell', () => {
     expect(localStorage.getItem('shift-rescue.session')).toBeNull()
   })
 
-  it('notes on the Evals screen that the data is not live yet', async () => {
+  it('renders the Evals screen without the old placeholder note', async () => {
+    // The screen reads recorded eval runs now (feature evals-live), so the
+    // "data is not live yet" note is gone; in this test the mock path serves
+    // the summary, which is the offline behaviour.
     const user = userEvent.setup()
     renderWithProviders(<App now={NOW} />)
 
     await user.click(screen.getByRole('button', { name: 'Evals' }))
 
-    expect(await screen.findByText(/not live yet/)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Evals' })).toBeInTheDocument()
+    expect(screen.queryByText(/not live yet/i)).not.toBeInTheDocument()
   })
 })

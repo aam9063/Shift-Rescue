@@ -245,3 +245,54 @@ class MetricsOut(BaseModel):
     lowConfidenceTotal: int
     deliveryFailures: int
     stuckRescues: int
+
+
+# --- eval runs (spec §7.5/§7.6 screen 9, feature evals-live) -------------------
+
+
+class EvalRunOut(BaseModel):
+    id: str
+    commit: str
+    trigger: str  # ci | manual
+    model: str
+    provider: str
+    suite: str  # golden | scenarios
+    startedAt: str
+    finishedAt: str | None
+    passed: bool
+    metrics: dict[str, Any]
+    violationCount: int
+
+
+class EvalRunDetailOut(EvalRunOut):
+    promptVersions: dict[str, Any]
+    invariantViolations: dict[str, Any]
+    reportPath: str | None
+    createdAt: str
+
+
+class EvalScenarioOut(BaseModel):
+    id: str
+    passed: bool
+
+
+class EvalModelComparisonOut(BaseModel):
+    name: str
+    accuracy: float
+    costPerMessage: str
+
+
+class EvalRunSummaryOut(BaseModel):
+    """Exactly the shape the Evals screen consumes (dashboardMock EvalRunSummary)
+    plus `hasRuns`: the honest emptiness flag for the no-runs state."""
+
+    hasRuns: bool
+    passed: bool
+    commit: str
+    ranAgo: str
+    accuracyHistory: list[float]
+    threshold: float
+    latestAccuracy: float
+    scenarios: list[EvalScenarioOut]
+    models: list[EvalModelComparisonOut]
+    invariantViolations: int

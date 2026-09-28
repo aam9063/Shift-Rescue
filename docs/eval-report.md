@@ -3,6 +3,13 @@
 Results of the evaluation harness (spec §8) as of the latest run, plus the
 failures found while building the project and how they were fixed.
 
+> **Live view:** every number below comes from the same source the dashboard
+> now serves. The Evals screen (and `GET /api/evals/runs*`, operator role)
+> reads the recorded `eval_run` rows, so the dashboard is the live view of
+> this data: run `evals/runner.py` (see the runbook, "Record an eval run")
+> and the latest accuracy, threshold verdict, per-scenario results and model
+> comparison appear there without editing this file.
+
 ## 1. Automated suites
 
 | Suite | Command | Result |

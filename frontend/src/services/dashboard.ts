@@ -10,7 +10,6 @@ import {
   type AgentDecision,
   type ChatMessage,
   type Conversation,
-  type EvalRunSummary,
   type LocationSettings,
   type OpsMetrics,
   type SystemStatus,
@@ -23,6 +22,7 @@ import {
   fetchConversationThread,
   fetchConversations,
   fetchDemoClock,
+  fetchEvalSummary,
   fetchOpsMetrics,
   fetchRescueDetail,
   fetchSettings,
@@ -32,6 +32,7 @@ import {
   resetDemoData,
   saveSettings,
   sendSimulatorMessage,
+  type EvalRunSummaryLive,
 } from './api'
 import { isMockMode } from './dataSource'
 import type { SimulatorEmployee } from '../domain/types'
@@ -75,15 +76,20 @@ export function useAgentDecisions(): {
   return { decisions: query.data ?? [], error: query.error, isLoading: query.isLoading }
 }
 
-export function useEvalRun(): { evalRun: EvalRunSummary | undefined } {
+export function useEvalRun(): {
+  evalRun: EvalRunSummaryLive | undefined
+  error: unknown
+  isLoading: boolean
+} {
+  const mockMode = isMockMode()
   const query = useQuery({
-    // No `/api/evals/runs*` endpoint exists yet: the Evals screen stays on
-    // mock data and says so in the UI.
     queryKey: ['eval-run'],
-    queryFn: async () => EVAL_RUN,
-    staleTime: Infinity,
+    // Live: the recorded-runs summary (operator-only). Mock mode keeps the
+    // offline fixture alive; it always has data, so `hasRuns` is always true.
+    queryFn: mockMode ? async () => ({ ...EVAL_RUN, hasRuns: true }) : fetchEvalSummary,
+    staleTime: mockMode ? Infinity : LIVE_STALE_TIME_MS,
   })
-  return { evalRun: query.data }
+  return { evalRun: query.data, error: query.error, isLoading: query.isLoading }
 }
 
 export function useOpsMetrics(): { metrics: OpsMetrics | undefined } {

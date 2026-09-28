@@ -12,6 +12,7 @@ from app.api.auth import router as auth_router
 from app.api.conversations import router as conversations_router
 from app.api.dev_tools import router as dev_tools_router
 from app.api.employees import router as employees_router
+from app.api.evals import router as evals_router
 from app.api.health import router as health_router
 from app.api.interpretations import router as interpretations_router
 from app.api.locations import router as locations_router
@@ -70,4 +71,5 @@ def create_app() -> FastAPI:
     if settings.demo_clock_enabled:
         app.include_router(dev_tools_router)
     app.include_router(metrics_router)
+    app.include_router(evals_router)
     return app

@@ -10,6 +10,7 @@ import type {
   AgentDecision,
   ChatMessage,
   Conversation,
+  EvalRunSummary,
   LocationSettings,
   OpsMetrics,
   SystemStatus,
@@ -83,6 +84,38 @@ interface MetricsWire {
 interface MutationAcceptedWire {
   status: string
   id: string
+}
+
+// --- Eval runs (spec §7.6 screen 9, feature evals-live) -----------------------
+
+interface EvalScenarioWire {
+  id: string
+  passed: boolean
+}
+
+interface EvalModelWire {
+  name: string
+  accuracy: number
+  costPerMessage: string
+}
+
+interface EvalRunSummaryWire {
+  hasRuns: boolean
+  passed: boolean
+  commit: string
+  ranAgo: string
+  accuracyHistory: number[]
+  threshold: number
+  latestAccuracy: number
+  scenarios: EvalScenarioWire[]
+  models: EvalModelWire[]
+  invariantViolations: number
+}
+
+/** The live summary adds the honest emptiness flag the mock never needs: the
+ * mock always has data, the API may have zero recorded runs. */
+export interface EvalRunSummaryLive extends EvalRunSummary {
+  hasRuns: boolean
 }
 
 /** Product latency target shown as the Ops caption; not served by the API. */
@@ -262,6 +295,13 @@ export async function saveSettings(next: LocationSettings): Promise<LocationSett
 /** Public endpoint: the degraded-mode banner works without a session. */
 export function fetchSystemStatus(): Promise<SystemStatus> {
   return apiFetch<SystemStatus>('/api/status')
+}
+
+/** Recorded eval runs (operator-only endpoint): the Evals screen's payload.
+ * The wire shape matches the summary contract, so the mapping is a spread. */
+export async function fetchEvalSummary(): Promise<EvalRunSummaryLive> {
+  const summary = await apiFetch<EvalRunSummaryWire>('/api/evals/runs/summary')
+  return { ...summary }
 }
 
 // --- Demo simulator (spec §7.5/§7.6) ------------------------------------------

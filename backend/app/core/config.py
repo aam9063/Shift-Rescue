@@ -7,12 +7,19 @@ unknown variables are ignored (`extra="ignore"`).
 
 import base64
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve `backend/.env` from the module, not from the current directory: the same
+# settings are used by the API (whose cwd is the package) and by tools run from
+# the repository root (the eval runner), and a cwd-relative file silently fell
+# back to the default port instead of the configured database.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     app_env: str = "local"
     service_name: str = "shift-rescue-backend"
