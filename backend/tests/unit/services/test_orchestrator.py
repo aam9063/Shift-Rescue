@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from app.agent.interpreter import MessageInterpreter
 from app.db.models import AuditEvent, Message, Offer, RescueCase, Shift
 from app.db.seed import DEMO_LOCATION_ID
+from tests.unit.services.helpers import run_to_offering
 
 CONVERSATION = "conv_1"
 PROVIDER_ID = "provider_msg_1"
@@ -479,3 +480,172 @@ async def _audit_events(db) -> list:
 
     async with db() as session:
         return list((await session.execute(select(AuditEvent))).scalars())
+
+
+# --- state-aware redirects (spec §5.5; odd/tasks/state-aware-replies) ---------
+
+
+async def test_unclear_message_with_open_case_reasks_confirmation(world) -> None:
+    """An OPEN case means the employee still owes the confirmation: an unclear
+    reply re-asks the same question they already know instead of claiming the
+    agent "only handles absences" while their absence is being handled."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="hola",
+    )
+
+    confirms = world.channel.with_template("absence_confirm")
+    assert len(confirms) == 2  # the original question and the re-ask
+    assert confirms[1]["to"] == "+34600000001"
+    assert "sala" in confirms[1]["body"]
+    assert "15:00" in confirms[1]["body"] and "23:00" in confirms[1]["body"]
+
+
+async def test_unclear_message_with_offering_case_reports_coverage_progress(world, db) -> None:
+    """The absent employee whose case is OFFERING must hear that their absence
+    is registered and coverage is being searched, not the generic redirect."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="sí",
+    )
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+    assert case.status == "OFFERING"
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_3",
+        text="hola",
+    )
+
+    searching = world.channel.with_template("state_searching_coverage")
+    assert len(searching) == 1
+    assert searching[0]["to"] == "+34600000001"
+    assert "sala" in searching[0]["body"]
+    assert "15:00" in searching[0]["body"] and "23:00" in searching[0]["body"]
+
+
+async def test_unclear_message_with_awaiting_approval_case_reports_the_wait(world, db) -> None:
+    """A conditional acceptance moves the case to AWAITING_APPROVAL: the absent
+    employee must hear that their coverage waits for the manager, not "I only
+    handle absences"."""
+    await run_to_offering(world)
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_02_floor",
+        provider_message_id="provider_msg_3",
+        text="llego a las 17:15",
+    )
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+    assert case.status == "AWAITING_APPROVAL"
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_4",
+        text="hola",
+    )
+
+    waiting = world.channel.with_template("state_awaiting_approval")
+    assert len(waiting) == 1
+    assert waiting[0]["to"] == "+34600000001"
+    assert "sala" in waiting[0]["body"]
+    assert "15:00" in waiting[0]["body"] and "23:00" in waiting[0]["body"]
+
+
+async def test_unclear_message_from_candidate_with_pending_offer_reminds_it(world, db) -> None:
+    """A candidate whose offer is still PENDING is reminded of it (they are
+    expected to answer), with the offered shift's window and role."""
+    offers = await run_to_offering(world)
+    target = offers[0]
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{target.employee_id}",
+        employee_id=target.employee_id,
+        provider_message_id="provider_msg_3",
+        text="hola",
+    )
+
+    reminders = world.channel.with_template("offer_reminder")
+    assert len(reminders) == 1
+    assert reminders[0]["to"] == "+34600000002"  # emp_02_floor, first sorted offer
+    assert "sala" in reminders[0]["body"]
+    assert "15:00" in reminders[0]["body"] and "23:00" in reminders[0]["body"]
+
+
+async def test_covered_case_keeps_the_generic_redirect(world, db) -> None:
+    """A COVERED case is closed for everyone: neither the absent employee nor
+    the (former) candidate has anything pending, so the generic redirect stays."""
+    offers = await run_to_offering(world)
+    target = offers[0]
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{target.employee_id}",
+        employee_id=target.employee_id,
+        provider_message_id="provider_msg_3",
+        text="vale si",
+    )
+    async with db() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+    assert case.status == "COVERED"
+
+    # The candidate: their offer is accepted, nothing pending.
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{target.employee_id}",
+        employee_id=target.employee_id,
+        provider_message_id="provider_msg_4",
+        text="hola",
+    )
+    # The absent employee: their case is terminal, nothing pending.
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_5",
+        text="hola",
+    )
+
+    redirects = world.channel.with_template("out_of_scope")
+    assert len(redirects) == 2
+    assert not world.channel.with_template("offer_reminder")
+    assert not world.channel.with_template("state_searching_coverage")
+
+
+async def test_escalated_case_keeps_the_generic_redirect(world) -> None:
+    """An ESCALATED case is terminal: the manager owns it now, so an unclear
+    message still gets the generic redirect, not a stale state message."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    world.clock.advance(timedelta(minutes=11))
+    await world.scheduler.run_due(world.clock.now())
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
+        text="hola",
+    )
+
+    assert world.channel.with_template("out_of_scope")
+    assert not world.channel.with_template("state_searching_coverage")
+    assert not world.channel.with_template("state_awaiting_approval")

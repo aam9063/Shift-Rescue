@@ -326,6 +326,9 @@ Las tres piezas se construyen con el **SDK de [Strands Agents](https://strandsag
 | `offer_confirmed` | "¡Genial, {nombre}! El turno de {inicio} a {fin} es tuyo. Ya está actualizado en tu horario. ¡Gracias!" |
 | `offer_pending_approval` | "Gracias, {nombre}. Se lo paso a {manager} para que lo confirme y te digo algo en unos minutos." |
 | `offer_already_covered` | "Gracias por responder, {nombre}. El turno ya se ha cubierto, ¡gracias igualmente!" |
+| `state_searching_coverage` | "Vale {nombre}, tu ausencia del turno de {rol} de {inicio} a {fin} ya está registrada y estoy buscando a alguien que te cubra. No tienes que hacer nada más." |
+| `state_awaiting_approval` | "Gracias, {nombre}. Ya hay quien cubra tu turno de {rol} de {inicio} a {fin}, solo falta que el encargado lo confirme. Te digo algo en cuanto resuelva." |
+| `offer_reminder` | "Hola {nombre}, sigue abierta la propuesta de cubrir el turno de {rol} de hoy de {inicio} a {fin}. Responde SÍ o NO, o dime hasta qué hora puedes." |
 | `offer_degraded` | Igual que `offer` pero terminando en "Responde 1 para SÍ o 2 para NO." |
 
 Nota: `absence_ack` no menciona salud aunque el empleado lo haga ("que te mejores" es genérico y se usa siempre).

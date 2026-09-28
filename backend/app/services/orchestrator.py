@@ -35,7 +35,7 @@ from app.db.models import (
 )
 from app.db.models import Interpretation as InterpretationRow
 from app.domain.eligibility import evaluate_eligibility
-from app.domain.entities import EligibilityResult, RescueSettings
+from app.domain.entities import EligibilityResult, RescueSettings, ShiftSlot
 from app.domain.entities import Employee as EmployeeEntity
 from app.domain.parser import Intent, parse_message
 from app.domain.quiet_hours import next_quiet_end, offers_allowed
@@ -856,17 +856,18 @@ class RescueOrchestrator:
                     actor="system",
                 )
             )
+            offer_body = render(
+                "offer",
+                employee_name=employee["full_name"],
+                location_name=location_name,
+                role=self._role_label(shift.role),
+                start=self._fmt(shift.starts_at, location_tz),
+                end=self._fmt(shift.ends_at, location_tz),
+            )
             try:
                 provider_id = await self._channel.send(
                     recipient_phone_e164=self._phone_of(employee),
-                    body=render(
-                        "offer",
-                        employee_name=employee["full_name"],
-                        location_name=location_name,
-                        role=self._role_label(shift.role),
-                        start=self._fmt(shift.starts_at, location_tz),
-                        end=self._fmt(shift.ends_at, location_tz),
-                    ),
+                    body=offer_body,
                     template_key="offer",
                     rescue_id=case.id,
                 )
@@ -896,7 +897,9 @@ class RescueOrchestrator:
                     conversation_id=f"conv_{candidate.employee_id}",
                     direction="outbound",
                     provider_message_id=provider_id,
-                    body_redacted="[template: offer]",
+                    # The body the candidate actually received: a placeholder
+                    # here made the dashboard's conversation view useless.
+                    body_redacted=redact_if_health(offer_body),
                     template_key="offer",
                     delivery_status="sent",
                     rescue_id=case.id,
@@ -2078,16 +2081,126 @@ class RescueOrchestrator:
 
     async def _send_out_of_scope(self, conversation_id: str, employee_id: str) -> None:
         employee = await self._employee(employee_id)
+        if employee is None:
+            return
+        if await self._send_state_aware_redirect(conversation_id, employee_id, employee):
+            return
         location_name, _ = await self._location_info(
             await self._location_of(employee_id) or ""
         )
-        if employee is None:
-            return
         await self._send_template(
             to=self._phone_of(employee),
             template_key="out_of_scope",
             location_name=location_name,
         )
+
+    async def _send_state_aware_redirect(
+        self,
+        conversation_id: str,
+        employee_id: str,
+        employee: dict[str, Any],
+    ) -> bool:
+        """Send the state-aware redirect for a live rescue; True when sent.
+
+        Priority follows what the employee can act on: an outstanding offer
+        to them first (they are a candidate and an answer is expected), then
+        their own live case — awaiting their confirmation (OPEN), being
+        covered (OFFERING) or waiting for the manager (AWAITING_APPROVAL).
+        Terminal cases (COVERED, ESCALATED, CANCELLED, ...) and employees
+        with nothing pending return False: the caller sends the generic
+        out_of_scope. Messages carry only the role and the shift window in
+        the location's timezone — never health details or internal ids (§10).
+        """
+        outstanding = await self._outstanding_offer_shift(employee_id)
+        if outstanding is not None:
+            shift, location_id = outstanding
+            _, location_tz = await self._location_info(location_id)
+            await self._send_template(
+                to=self._phone_of(employee),
+                template_key="offer_reminder",
+                conversation_id=conversation_id,
+                employee_id=employee_id,
+                employee_name=employee["full_name"],
+                role=self._role_label(shift.role),
+                start=self._fmt(shift.starts_at, location_tz),
+                end=self._fmt(shift.ends_at, location_tz),
+            )
+            return True
+        live = await self._live_absence_case(employee_id)
+        if live is None:
+            return False
+        status, shift_id, location_id = live
+        live_shift = await self._workforce.get_shift(shift_id)
+        if live_shift is None:
+            return False
+        _, location_tz = await self._location_info(location_id)
+        params: dict[str, Any] = dict(
+            employee_name=employee["full_name"],
+            role=self._role_label(live_shift.role),
+            start=self._fmt(live_shift.starts_at, location_tz),
+            end=self._fmt(live_shift.ends_at, location_tz),
+        )
+        template_key = {
+            State.OPEN.value: "absence_confirm",
+            State.OFFERING.value: "state_searching_coverage",
+            State.AWAITING_APPROVAL.value: "state_awaiting_approval",
+        }[status]
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key=template_key,
+            conversation_id=conversation_id,
+            employee_id=employee_id,
+            **params,
+        )
+        return True
+
+    async def _outstanding_offer_shift(self, employee_id: str) -> tuple[ShiftSlot, str] | None:
+        """(shift, location_id) of the employee's most recent PENDING offer."""
+        async with self._sessions() as session:
+            offer = (
+                await session.execute(
+                    select(Offer)
+                    .where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                    .order_by(Offer.sent_at.desc())
+                )
+            ).scalars().first()
+            if offer is None:
+                return None
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == offer.rescue_id)
+                )
+            ).scalars().first()
+        if case is None:
+            return None
+        shift = await self._workforce.get_shift(case.shift_id)
+        if shift is None:
+            return None
+        return shift, case.location_id
+
+    async def _live_absence_case(self, employee_id: str) -> tuple[str, str, str] | None:
+        """(status, shift_id, location_id) of the employee's live rescue case.
+
+        Only states where something is still pending count: a terminal case
+        (COVERED, ESCALATED, CANCELLED, ...) means nothing is pending and the
+        generic redirect is the honest answer.
+        """
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase)
+                    .where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.status.in_(
+                            [State.OPEN.value, State.OFFERING.value, State.AWAITING_APPROVAL.value]
+                        ),
+                    )
+                    .order_by(RescueCase.opened_at.desc())
+                )
+            ).scalars().first()
+            if case is None:
+                return None
+            return case.status, case.shift_id, case.location_id
 
     async def _quiet_hours(self, location_id: str) -> tuple[time, time]:
         async with self._sessions() as session:
