@@ -12,11 +12,23 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import func, select
 from structlog.testing import capture_logs
 
+from app.api import dev_tools
 from app.api.dev_tools import get_demo_redis
 from app.core.clock import DEMO_CLOCK_OFFSET_KEY
 from app.core.config import Settings, get_settings
+from app.db.models import (
+    ApprovalRequest,
+    AuditEvent,
+    Conversation,
+    Interpretation,
+    Message,
+    Offer,
+    RescueCase,
+    Shift,
+)
 from app.db.session import get_session
 from app.main import create_app
 from app.workers.tasks import process_inbound_message, reconcile_stale_cases
@@ -70,6 +82,20 @@ def stub_sweep(monkeypatch):
     stub = StubTask()
     monkeypatch.setattr(reconcile_stale_cases, "delay", stub.delay)
     return stub
+
+
+@pytest.fixture()
+def stub_seed(monkeypatch):
+    """Replaces `seed_database` inside the route module: the hermetic SQLite
+    world is not the demo location, so the unit tests assert the *call* (the
+    seed receives the route's session) instead of running the real seed."""
+    sessions: list[object] = []
+
+    async def fake_seed(session):
+        sessions.append(session)
+
+    monkeypatch.setattr(dev_tools, "seed_database", fake_seed)
+    return sessions
 
 
 def make_client(
@@ -298,3 +324,114 @@ async def test_clock_advance_requires_a_token(dev_client) -> None:
     response = await dev_client.post("/dev/clock/advance", json={"seconds": 60})
 
     assert response.status_code == 401
+
+
+# --- demo reset: artifacts out, day reseeded, clock back on real time ----------
+
+
+async def _count(world, model) -> int:
+    async with world.sessions() as session:
+        total = await session.scalar(select(func.count()).select_from(model))
+    return int(total)
+
+
+async def test_demo_reset_clears_artifacts_and_reseeds(
+    dev_client, world, fake_redis, stub_sweep, stub_seed
+) -> None:
+    # The fixture world is exactly the leftover-run situation: a rescue with
+    # offers/audit/approval, conversations with messages and interpretations,
+    # and a shift that still ends in the future. A leftover clock offset is
+    # part of the same mess.
+    fake_redis.values[DEMO_CLOCK_OFFSET_KEY] = "36000"
+    before = {
+        Interpretation: await _count(world, Interpretation),
+        Message: await _count(world, Message),
+        Conversation: await _count(world, Conversation),
+        ApprovalRequest: await _count(world, ApprovalRequest),
+        Offer: await _count(world, Offer),
+        AuditEvent: await _count(world, AuditEvent),
+        RescueCase: await _count(world, RescueCase),
+        Shift: await _count(world, Shift),
+    }
+    assert before[RescueCase] == 1 and before[Message] == 3 and before[Shift] == 1
+
+    response = await dev_client.post("/dev/demo/reset", headers=auth_headers())
+
+    assert response.status_code == 200
+    body = response.json()
+    # Summary shape: rows removed per table plus the virtual time afterwards.
+    assert set(body["deleted"]) == {
+        "interpretation",
+        "message",
+        "conversation",
+        "approval_request",
+        "offer",
+        "audit_event",
+        "rescue_case",
+        "shift",
+    }
+    assert body["deleted"]["rescue_case"] == 1
+    assert body["deleted"]["message"] == 3
+    assert body["deleted"]["shift"] == 1  # ends 9 h from now: gone
+    assert body["offsetSeconds"] == 0
+    assert abs(datetime.fromisoformat(body["now"]) - datetime.now(UTC)) < timedelta(seconds=5)
+
+    async with world.sessions() as session:
+        for model in (
+            Interpretation,
+            Message,
+            Conversation,
+            ApprovalRequest,
+            Offer,
+            AuditEvent,
+            RescueCase,
+            Shift,
+        ):
+            assert await session.scalar(select(func.count()).select_from(model)) == 0
+    # The seed ran on the route's own session, so the day is re-created there.
+    assert len(stub_seed) == 1
+    # The clock went through the shared reset path: offset zeroed, sweep run.
+    assert fake_redis.values[DEMO_CLOCK_OFFSET_KEY] == "0"
+    assert stub_sweep.calls == [()]
+
+
+async def test_demo_reset_keeps_shifts_that_already_ended(
+    dev_client, world, stub_sweep, stub_seed
+) -> None:
+    async with world.sessions() as session:
+        session.add(
+            Shift(
+                id="shift_past",
+                location_id="loc_test",
+                role="floor",
+                starts_at=datetime.now(UTC) - timedelta(hours=12),
+                ends_at=datetime.now(UTC) - timedelta(hours=4),
+                employee_id="emp_1",
+                status="covered",
+            )
+        )
+        await session.commit()
+
+    response = await dev_client.post("/dev/demo/reset", headers=auth_headers())
+
+    assert response.status_code == 200
+    # History is not the demo's problem: only the day onwards is wiped.
+    assert response.json()["deleted"]["shift"] == 1
+
+
+async def test_demo_reset_requires_a_token(dev_client) -> None:
+    response = await dev_client.post("/dev/demo/reset")
+
+    assert response.status_code == 401
+
+
+async def test_demo_reset_answers_404_outside_a_demo_environment(
+    world, monkeypatch
+) -> None:
+    client, application = make_client(world, FakeRedis(), "production", monkeypatch)
+    async with client as async_client:
+        response = await async_client.post("/dev/demo/reset", headers=auth_headers())
+
+    assert response.status_code == 404
+    application.dependency_overrides.clear()
+    get_settings.cache_clear()

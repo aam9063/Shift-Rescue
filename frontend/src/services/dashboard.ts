@@ -29,6 +29,7 @@ import {
   fetchSimulatorEmployees,
   fetchSystemStatus,
   resetDemoClock,
+  resetDemoData,
   saveSettings,
   sendSimulatorMessage,
 } from './api'
@@ -356,6 +357,52 @@ export function useSendDemoMessage(): {
 /** The demo clock is UTC; show HH:MM without a timezone debate. */
 function formatVirtualTime(iso: string): string {
   return iso.slice(11, 16)
+}
+
+/** What one demo reset removed (the endpoint's honest summary). */
+export interface DemoResetSummary {
+  deleted: Record<string, number>
+  now: string
+  offsetSeconds: number
+}
+
+/** One-click demo reset (Simulator, "Reset demo data"): deletes every
+ * rescue, message and offer of the demo, reseeds the day and puts the demo
+ * clock back on real time — the backend answers what it removed, and every
+ * board refetches so the screen reads the clean state immediately. In mock
+ * mode there is nothing stored to delete; the demo data is in-memory. */
+export function useDemoDataReset(): {
+  reset: () => void
+  isPending: boolean
+  summary: DemoResetSummary | null
+} {
+  const queryClient = useQueryClient()
+  const mockMode = isMockMode()
+  const [mockSummary, setMockSummary] = useState<DemoResetSummary | null>(null)
+  const mutation = useMutation({
+    mutationFn: () => resetDemoData(),
+    onSuccess: (summary) => {
+      queryClient.setQueryData(['demo-clock'], {
+        now: summary.now,
+        offsetSeconds: summary.offsetSeconds,
+      })
+      // Everything the reset touches: the board, the roster, the threads,
+      // the scenario and the clock all refetch from the reseeded state.
+      void queryClient.invalidateQueries()
+    },
+  })
+  const reset = () => {
+    if (mockMode) {
+      setMockSummary({ deleted: {}, now: new Date().toISOString(), offsetSeconds: 0 })
+      return
+    }
+    mutation.mutate()
+  }
+  return {
+    reset,
+    isPending: mutation.isPending,
+    summary: mockMode ? mockSummary : (mutation.data ?? null),
+  }
 }
 
 // --- Acceptance-race scenario (spec §7.6): the honest concurrency demo -------

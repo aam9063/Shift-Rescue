@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import type { SimulatorEmployee } from '../domain/types'
+import type { DemoResetSummary } from '../services/dashboard'
 import {
   useAcceptanceRaceScenario,
   useDemoClock,
+  useDemoDataReset,
   useDemoEmployees,
   useDemoThread,
   useSendDemoMessage,
@@ -87,6 +89,33 @@ function formatDemoOffset(seconds: number): string {
     parts.push(`${minutes} m`)
   }
   return `${sign}${parts.join(' ')} ${seconds > 0 ? 'ahead' : 'behind'}`
+}
+
+/** Human labels for the tables the demo reset reports. */
+const RESET_TABLE_LABELS: Record<string, string> = {
+  interpretation: 'interpretations',
+  message: 'messages',
+  conversation: 'conversations',
+  approval_request: 'approval requests',
+  offer: 'offers',
+  audit_event: 'audit events',
+  rescue_case: 'rescues',
+  shift: 'shifts',
+}
+
+/** The endpoint's summary, word for word: what was removed and where the
+ * clock ended up. Leftover runs are the main source of demo confusion, so
+ * the result line is the proof the screen is clean again. */
+function formatResetSummary(summary: DemoResetSummary): string {
+  const counts = Object.entries(summary.deleted)
+    .filter(([, count]) => count > 0)
+    .map(([table, count]) => `${count} ${RESET_TABLE_LABELS[table] ?? table}`)
+    .join(', ')
+  const clock =
+    summary.offsetSeconds === 0
+      ? 'demo clock back on real time'
+      : `demo clock ${formatDemoOffset(summary.offsetSeconds)}`
+  return counts === '' ? `Nothing to delete. ${clock}.` : `Deleted ${counts}. ${clock}.`
 }
 
 /**
@@ -202,6 +231,8 @@ export function SimulatorScreen() {
   const { employees } = useDemoEmployees()
   const { time, offsetSeconds, virtualNow, advance, reset } = useDemoClock()
   const scenario = useAcceptanceRaceScenario()
+  const demoReset = useDemoDataReset()
+  const [confirmingReset, setConfirmingReset] = useState(false)
 
   const now = virtualNow ?? new Date()
   const roster = employees
@@ -263,6 +294,46 @@ export function SimulatorScreen() {
           >
             Reset clock
           </button>
+          {confirmingReset ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs tracking-tight text-text-primary">
+                This deletes every rescue, message and offer of the demo, plus the shifts from
+                today onwards, and reseeds the schedule. <strong>It cannot be undone.</strong>
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingReset(false)
+                  demoReset.reset()
+                }}
+                disabled={demoReset.isPending}
+                className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-error bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-error active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {demoReset.isPending ? 'Resetting…' : 'Yes, reset demo data'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingReset(false)}
+                className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-text-primary active:scale-95"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingReset(true)}
+              disabled={demoReset.isPending}
+              className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reset demo data
+            </button>
+          )}
+          {demoReset.summary !== null && (
+            <p role="status" className="w-full text-xs tracking-tight text-text-secondary">
+              {formatResetSummary(demoReset.summary)}
+            </p>
+          )}
           <p className="w-full text-xs tracking-tight text-text-secondary">
             Broker timers keep their real-time ETA; deadlines and escalations follow the demo clock.
             {offset !== 0 &&

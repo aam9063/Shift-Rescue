@@ -11,6 +11,7 @@ import {
   fetchRescueDetail,
   fetchSimulatorEmployees,
   resetDemoClock,
+  resetDemoData,
   sendSimulatorMessage,
 } from '../services/api'
 import { isMockMode } from '../services/dataSource'
@@ -24,6 +25,7 @@ vi.mock('../services/api', () => ({
   fetchDemoClock: vi.fn(),
   advanceDemoClock: vi.fn(),
   resetDemoClock: vi.fn(),
+  resetDemoData: vi.fn(),
   fetchActiveRescues: vi.fn(),
   fetchRescueDetail: vi.fn(),
 }))
@@ -88,6 +90,11 @@ beforeEach(() => {
     offsetSeconds: 600,
   })
   vi.mocked(resetDemoClock).mockResolvedValue({
+    now: '2026-10-03T15:11:00+00:00',
+    offsetSeconds: 0,
+  })
+  vi.mocked(resetDemoData).mockResolvedValue({
+    deleted: { rescue_case: 2, message: 5, offer: 3, shift: 14 },
     now: '2026-10-03T15:11:00+00:00',
     offsetSeconds: 0,
   })
@@ -378,6 +385,59 @@ describe('SimulatorScreen (spec §7.6, real data)', () => {
     expect(await screen.findByText('15:21')).toBeInTheDocument()
   })
 
+  // --- one-click demo reset (feature demo-reset) ------------------------------
+
+  it('asks for confirmation before resetting the demo data', async () => {
+    const user = userEvent.setup()
+    renderScreen()
+    await screen.findByText('Ana Floor')
+
+    await user.click(screen.getByRole('button', { name: 'Reset demo data' }))
+
+    // The confirmation names what it deletes and admits it is destructive.
+    expect(resetDemoData).not.toHaveBeenCalled()
+    expect(screen.getByText(/every rescue, message and offer of the demo/)).toBeInTheDocument()
+    expect(screen.getByText(/cannot be undone/)).toBeInTheDocument()
+  })
+
+  it('resets through the endpoint after confirmation and refreshes everything', async () => {
+    const user = userEvent.setup()
+    renderScreen()
+    await screen.findByText('Ana Floor')
+    const rosterCallsBefore = vi.mocked(fetchSimulatorEmployees).mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Reset demo data' }))
+    await user.click(screen.getByRole('button', { name: 'Yes, reset demo data' }))
+
+    expect(resetDemoData).toHaveBeenCalledTimes(1)
+    // The result line is the endpoint's honest summary.
+    expect(
+      await screen.findByText(
+        'Deleted 2 rescues, 5 messages, 3 offers, 14 shifts. demo clock back on real time.',
+      ),
+    ).toBeInTheDocument()
+    // Every board refetches: the roster (and with it the clock, threads and
+    // rescues) is invalidated by the reset.
+    await waitFor(() => {
+      expect(vi.mocked(fetchSimulatorEmployees).mock.calls.length).toBeGreaterThan(
+        rosterCallsBefore,
+      )
+    })
+    expect(fetchDemoClock).toHaveBeenCalledTimes(2)
+  })
+
+  it('can cancel out of the reset confirmation', async () => {
+    const user = userEvent.setup()
+    renderScreen()
+    await screen.findByText('Ana Floor')
+
+    await user.click(screen.getByRole('button', { name: 'Reset demo data' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(resetDemoData).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Reset demo data' })).toBeInTheDocument()
+  })
+
   it('disables the scenario and says why when no rescue is offering', async () => {
     renderScreen()
 
@@ -460,5 +520,18 @@ describe('SimulatorScreen behind VITE_USE_MOCK', () => {
     expect(await screen.findByText(CONVERSATIONS[0].messages[0].text)).toBeInTheDocument()
     // The mock clock starts at its documented demo time.
     expect(screen.getByText('15:11')).toBeInTheDocument()
+  })
+
+  it('keeps the reset control usable and honest without a backend', async () => {
+    vi.mocked(isMockMode).mockReturnValue(true)
+    const user = userEvent.setup()
+    renderScreen()
+
+    await user.click(screen.getByRole('button', { name: 'Reset demo data' }))
+    await user.click(screen.getByRole('button', { name: 'Yes, reset demo data' }))
+
+    // Mock mode stores nothing: the line says so instead of faking a wipe.
+    expect(resetDemoData).not.toHaveBeenCalled()
+    expect(await screen.findByText('Nothing to delete. demo clock back on real time.')).toBeInTheDocument()
   })
 })

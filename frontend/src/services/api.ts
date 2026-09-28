@@ -334,3 +334,16 @@ export async function advanceDemoClock(seconds: number): Promise<DemoClockWire> 
 export async function resetDemoClock(): Promise<DemoClockWire> {
   return apiFetch<DemoClockWire>('/dev/clock/reset', { method: 'POST' })
 }
+
+interface DemoResetWire {
+  /** Rows removed per table, so the result line can be honest. */
+  deleted: Record<string, number>
+  now: string
+  offsetSeconds: number
+}
+
+/** Wipe every demo artifact (rescues, messages, offers...), reseed the day
+ * and reset the demo clock — the one-click return to a clean state. */
+export async function resetDemoData(): Promise<DemoResetWire> {
+  return apiFetch<DemoResetWire>('/dev/demo/reset', { method: 'POST' })
+}

@@ -13,6 +13,7 @@ outside `local`/`test`/`demo`, and `require_demo_environment` answers a hard
 a manager JWT.
 """
 
+from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
 
@@ -21,7 +22,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from redis import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -32,7 +34,18 @@ from app.api.dependencies import (
 )
 from app.core.clock import DEMO_CLOCK_OFFSET_KEY, DemoClock, redis_offset_source
 from app.core.config import Settings, get_settings
-from app.db.models import Employee
+from app.db.models import (
+    ApprovalRequest,
+    AuditEvent,
+    Conversation,
+    Employee,
+    Interpretation,
+    Message,
+    Offer,
+    RescueCase,
+    Shift,
+)
+from app.db.seed import seed_database
 from app.schemas.dashboard import iso_utc
 from app.workers.tasks import process_inbound_message, reconcile_stale_cases
 
@@ -73,6 +86,15 @@ class DemoMutationOut(BaseModel):
 
     status: str  # "queued"
     id: str
+
+
+class DemoResetOut(BaseModel):
+    """Body of the demo reset: rows removed per table plus the virtual time
+    the environment is left at, so the UI can report it honestly."""
+
+    deleted: dict[str, int]  # table name -> rows removed
+    now: str  # ISO-8601 virtual time after the clock reset
+    offsetSeconds: int
 
 
 def get_demo_redis(settings: Settings = Depends(get_settings)) -> Redis:
@@ -163,6 +185,15 @@ async def reset_demo_clock(
     offset is set back to zero in Redis and the reconcile sweep runs
     immediately, exactly as after an advance.
     """
+    logger.info("demo_clock_reset")
+    return _zero_demo_clock_offset(client)
+
+
+def _zero_demo_clock_offset(client: Redis) -> DemoClockOut:
+    """The code path behind `POST /dev/clock/reset`, shared with the full demo
+    reset: zero the Redis offset and run the reconcile sweep immediately.
+
+    A Redis failure must be loud (503) — half a reset is worse than none."""
     try:
         client.set(DEMO_CLOCK_OFFSET_KEY, "0")
     except (RedisError, OSError) as error:
@@ -172,7 +203,6 @@ async def reset_demo_clock(
     # Sweep immediately: cases whose deadline moved back with the clock stop
     # escalating on stale evidence, same rule as the advance route.
     reconcile_stale_cases.delay()
-    logger.info("demo_clock_reset")
     return DemoClockOut(now=iso_utc(clock.now()), offsetSeconds=clock.offset_seconds())
 
 
@@ -188,3 +218,56 @@ async def get_demo_clock(
     """
     clock = DemoClock(redis_offset_source(client))
     return DemoClockOut(now=iso_utc(clock.now()), offsetSeconds=clock.offset_seconds())
+
+
+# Children before parents: the order respects the foreign keys —
+# interpretation -> message -> conversation, approval_request -> offer,
+# audit_event -> rescue_case. `shift` goes last (rescue_case points at it)
+# and only for the day onwards, so past history stays auditable.
+_DEMO_ARTIFACT_MODELS = (
+    Interpretation,
+    Message,
+    Conversation,
+    ApprovalRequest,
+    Offer,
+    AuditEvent,
+    RescueCase,
+)
+
+
+@router.post("/demo/reset", response_model=DemoResetOut)
+async def reset_demo_data(
+    _principal: ManagerPrincipal = Depends(current_manager),
+    session: AsyncSession = Depends(get_db),
+    client: Redis = Depends(get_demo_redis),
+) -> DemoResetOut:
+    """Wipe the demo's operational artifacts and reseed the day, in order.
+
+    Leftover runs are the main source of demo confusion (stale threads,
+    old offers, a clock left hours ahead). This does what the maintainer
+    used to do by hand, in the same order the foreign keys demand:
+    artifacts (children first), then today's shifts onwards, then the seed
+    (`app/db/seed.py` — `seed_cli` is only its CLI wrapper), and finally the
+    clock reset through the very same code path `POST /dev/clock/reset` uses.
+    The answer reports how many rows each table lost and the virtual time,
+    so the UI can state honestly what happened.
+    """
+    deleted: dict[str, int] = {}
+    for model in _DEMO_ARTIFACT_MODELS:
+        # DELETE answers a CursorResult whose rowcount is the rows removed;
+        # the async `Result` facade does not re-export the attribute.
+        cursor = cast(CursorResult, await session.execute(delete(model)))
+        deleted[model.__tablename__] = cursor.rowcount
+    cursor = cast(
+        CursorResult,
+        await session.execute(delete(Shift).where(Shift.ends_at >= datetime.now(UTC))),
+    )
+    deleted[Shift.__tablename__] = cursor.rowcount
+    await session.commit()
+
+    # The seed re-creates the demo day (its rotation included) deterministically.
+    await seed_database(session)
+
+    clock = _zero_demo_clock_offset(client)
+    logger.info("demo_data_reset", deleted=deleted)
+    return DemoResetOut(deleted=deleted, now=clock.now, offsetSeconds=clock.offsetSeconds)

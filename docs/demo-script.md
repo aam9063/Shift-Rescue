@@ -31,8 +31,13 @@ with). All data is demo data at "La Terraza del Puerto".
    `redis` and `postgres` must all be up. The worker is what makes the agent
    reply — without it nothing below happens.
 2. Log in to the dashboard with the demo manager account.
-3. **Reset the demo clock** (Simulator → *Reset clock*) until it reads
-   *on real time*. A leftover offset silently moves "now" for the whole worker.
+3. **Step 0 — reset the demo data** (Simulator → *Reset demo data*, then
+   confirm). One click deletes every rescue, message and offer of the demo
+   plus the shifts from today onwards, reseeds the schedule and puts the demo
+   clock back on real time. Do this before anything else: leftovers from
+   previous runs are the main source of demo confusion — threads answering
+   about shifts that already closed, an old `[template: offer]` placeholder,
+   a clock left hours ahead.
 4. Open **Simulator**. Each frame is labelled with the employee's situation
    against the current time — *On shift now*, *Starts at HH:MM*, *Ended at
    HH:MM*, *No shift today*. Only an *On shift now* employee can report an
@@ -119,7 +124,8 @@ the case moves on without leaving the page.
 
 1. Both windows side by side: Simulator (left) and Today (right), 1080p,
    browser zoom 100 %.
-2. Reset the demo clock and reseed if yesterday's data is stale (runbook §5).
+2. Reset the demo data and the clock in one click (Simulator → *Reset demo
+   data*; runbook §5).
 3. Walk §3 → §4 → §5 of this page in order; the countdown while Searching and
    the Escalated summary are the two shots worth holding on.
 4. Finish with the manager close — it is the proof the loop ends with a human

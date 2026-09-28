@@ -284,6 +284,33 @@ horizontally at any of them:
 | Pause the agent | Settings screen (or `PATCH /api/locations/<id>/settings`) |
 | Rotate the SSH key | create a new key pair, add the public key to `~/.ssh/authorized_keys`, update the `EC2_SSH_KEY` secret |
 
+### Reset the demo
+
+`POST /dev/demo/reset` (manager JWT; demo environments only, like every `/dev`
+route) returns the demo to a clean, comprehensible state in one call — the
+same cleanup a maintainer used to do by hand, in the order the foreign keys
+demand:
+
+1. Deletes the operational artifacts, children first:
+   `interpretation`, `message`, `conversation`, `approval_request`, `offer`,
+   `audit_event`, `rescue_case`.
+2. Deletes the shifts from today onwards (`ends_at >= now()`); past history
+   stays.
+3. Re-runs the seed (`app/db/seed.py`, the function `python -m
+   app.db.seed_cli` wraps), so the demo day exists again with its rotation.
+4. Resets the demo clock through the same code path as `POST
+   /dev/clock/reset`: the Redis offset is zeroed and the reconcile sweep
+   runs, so no leftover advance silently moves "now" for the worker.
+
+The answer reports how many rows each table lost and the virtual time
+afterwards, so the caller can state honestly what happened. The Simulator's
+**Reset demo data** button (with confirmation) is the easiest path; from a
+shell:
+
+```bash
+curl -fsS -X POST https://<domain>/dev/demo/reset -H "Authorization: Bearer $TOKEN"
+```
+
 ### Timers (broker-owned, survive restarts)
 
 Timers (wave timeouts, rescue deadlines, approval expirations) are owned by
