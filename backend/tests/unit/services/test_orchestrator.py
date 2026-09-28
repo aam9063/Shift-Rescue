@@ -9,7 +9,15 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.agent.interpreter import MessageInterpreter
-from app.db.models import ApprovalRequest, AuditEvent, Message, Offer, RescueCase, Shift
+from app.db.models import (
+    ApprovalRequest,
+    AuditEvent,
+    Manager,
+    Message,
+    Offer,
+    RescueCase,
+    Shift,
+)
 from app.db.seed import DEMO_LOCATION_ID
 from app.services.orchestrator import RECENT_CASE_WINDOW_HOURS
 from tests.unit.services.helpers import build_world, run_to_offering
@@ -744,3 +752,80 @@ async def test_an_offer_for_a_shift_that_already_ended_is_not_acceptable() -> No
     assert stale, "the stale offer must be audited"
     assert stored.status == "CANCELLED"
     assert world.channel.with_template("offer_already_covered")
+
+
+async def test_manager_notices_are_recorded_on_the_case(world, db) -> None:
+    """A notice to a phone left no trace: the timeline showed a rescue that
+    escalated "by itself". Every manager notice is now audited on the case."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    world.clock.advance(timedelta(minutes=11))
+    await world.scheduler.run_due(world.clock.now())
+
+    async with db() as session:
+        events = (await session.execute(select(AuditEvent))).scalars().all()
+
+    notices = [e for e in events if e.type == "MANAGER_NOTIFIED"]
+    assert notices, "the escalation notice must be recorded"
+    assert notices[0].payload["template"] == "manager_escalated"
+    assert world.channel.with_template("manager_escalated")
+
+
+async def test_a_manager_without_a_phone_is_audited_as_skipped(world, db) -> None:
+    """The dashboard should show that nobody was reachable, not silence."""
+    async with db() as session:
+        manager = (await session.execute(select(Manager))).scalar_one()
+        manager.phone_e164 = None
+        await session.commit()
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    world.clock.advance(timedelta(minutes=11))
+    await world.scheduler.run_due(world.clock.now())
+
+    async with db() as session:
+        events = (await session.execute(select(AuditEvent))).scalars().all()
+
+    skipped = [e for e in events if e.type == "MANAGER_NOTIFY_SKIPPED"]
+    assert skipped, "an unreachable manager must be visible in the timeline"
+    assert skipped[0].payload["reason"] == "no manager phone"
+
+
+async def test_the_race_loser_notice_is_stored_in_their_conversation(world, db) -> None:
+    """It was sent and never recorded, so the thread looked unanswered."""
+    offers = await run_to_offering(world)
+    winner, loser = offers[0], offers[1]
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{winner.employee_id}",
+        employee_id=winner.employee_id,
+        provider_message_id="accept_winner",
+        text="sí",
+    )
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{loser.employee_id}",
+        employee_id=loser.employee_id,
+        provider_message_id="accept_loser",
+        text="sí",
+    )
+
+    async with db() as session:
+        stored = (
+            await session.execute(
+                select(Message).where(
+                    Message.template_key == "offer_already_covered",
+                    Message.direction == "outbound",
+                )
+            )
+        ).scalars().all()
+
+    assert stored, "the loser's notice must be in their conversation"
+    assert "ya se ha cubierto" in stored[0].body_redacted

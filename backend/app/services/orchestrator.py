@@ -1140,16 +1140,14 @@ class RescueOrchestrator:
                     shift_id=case.shift_id,
                     origin=f"employee:{employee_id}",
                 )
-                manager = await self._manager_for(case.location_id)
-                if manager is not None and manager.get("phone_e164"):
-                    await self._send_template(
-                        to=manager["phone_e164"],
-                        template_key="manager_covered",
-                        employee_name=await self._employee_name(employee_id),
-                        role="—",
-                        start="—",
-                        end="—",
-                    )
+                await self._notify_manager(
+                    case,
+                    "manager_covered",
+                    employee_name=await self._employee_name(employee_id),
+                    role="—",
+                    start="—",
+                    end="—",
+                )
                 return True
 
             if case.status != State.OFFERING.value:
@@ -1367,6 +1365,8 @@ class RescueOrchestrator:
         await self._send_template(
             to=self._phone_of(employee),
             template_key="offer_already_covered",
+            conversation_id=f"conv_twilio_{self._phone_of(employee)}",
+            employee_id=employee_id,
             employee_name=employee["full_name"],
         )
 
@@ -2038,15 +2038,42 @@ class RescueOrchestrator:
             )
         )
 
-    async def _notify_escalation(self, case: RescueCase) -> None:
+    async def _notify_manager(self, case: RescueCase, template_key: str, **params: Any) -> None:
+        """Tell the manager something about a rescue, and record that we did.
+
+        The message goes to a phone, not to an employee conversation, so without
+        an audit event the dashboard timeline would show a case that escalated
+        "by itself" with no trace of the notice. Best effort, like every
+        outbound send: what is recorded is the attempt, never a delivery claim.
+        """
         manager = await self._manager_for(case.location_id)
         if manager is None or not manager.get("phone_e164"):
+            await self._audit_notice(case, template_key, "no manager phone")
             return
+        await self._send_template(to=manager["phone_e164"], template_key=template_key, **params)
+        await self._audit_notice(case, template_key, None)
+
+    async def _audit_notice(
+        self, case: RescueCase, template_key: str, skipped_reason: str | None
+    ) -> None:
+        async with self._sessions() as session:
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=case.id,
+                    type="MANAGER_NOTIFIED" if skipped_reason is None else "MANAGER_NOTIFY_SKIPPED",
+                    payload={"template": template_key, "reason": skipped_reason},
+                    actor="system",
+                )
+            )
+            await session.commit()
+
+    async def _notify_escalation(self, case: RescueCase) -> None:
         shift = await self._workforce.get_shift(case.shift_id)
         location_name, location_tz = await self._location_info(case.location_id)
-        await self._send_template(
-            to=manager["phone_e164"],
-            template_key="manager_escalated",
+        await self._notify_manager(
+            case,
+            "manager_escalated",
             role=self._role_label(shift.role) if shift else "—",
             start=self._fmt(shift.starts_at, location_tz) if shift else "—",
             end=self._fmt(shift.ends_at, location_tz) if shift else "—",

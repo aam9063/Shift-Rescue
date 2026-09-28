@@ -23,6 +23,8 @@ const eventLabels: Record<AuditEventType, string> = {
   SHIFT_ASSIGNED: 'Shift assigned in HRIS',
   ESCALATED: 'Escalated to manager',
   CANCELLED: 'Rescue cancelled',
+  MANAGER_NOTIFIED: 'Manager notified',
+  MANAGER_NOTIFY_SKIPPED: 'Manager could not be reached',
 }
 
 export function eventLabel(type: AuditEventType): string {
