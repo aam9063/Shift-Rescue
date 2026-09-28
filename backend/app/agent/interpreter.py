@@ -12,6 +12,8 @@ from pydantic import ValidationError
 from app.agent.schemas import Interpretation
 from app.ports import LLMClient
 
+PROMPT_VERSION = "interpreter_v5"
+
 FALLBACK = Interpretation(intent="UNCLEAR", confidence=0.0)
 
 
@@ -24,7 +26,7 @@ class MessageInterpreter:
         self,
         llm: LLMClient,
         *,
-        prompt_version: str = "interpreter_v1",
+        prompt_version: str = PROMPT_VERSION,
         confidence_threshold: float = 0.75,
         max_retries: int = 1,
     ) -> None:
@@ -42,9 +44,10 @@ class MessageInterpreter:
                 attempt_context = {**attempt_context, "validation_error": last_error}
             try:
                 raw = await self._llm.interpret(message_body, attempt_context)
-                return Interpretation(
-                    **raw, prompt_version=self.prompt_version
-                ).model_copy()
+                # A real LLMClient returns the whole structured payload, which
+                # already carries prompt_version; the interpreter owns it, so it
+                # must overwrite rather than duplicate the keyword argument.
+                return Interpretation(**{**raw, "prompt_version": self.prompt_version})
             except ValidationError as error:
                 last_error = str(error)
             except Exception as error:
@@ -52,3 +55,9 @@ class MessageInterpreter:
                 raise ProviderUnavailableError(str(error)) from error
 
         return FALLBACK
+
+    @property
+    def last_usage(self) -> dict[str, Any] | None:
+        """Usage dict of the wrapped client's last call, or None if unreported."""
+        usage = getattr(self._llm, "last_usage", None)
+        return usage if isinstance(usage, dict) else None

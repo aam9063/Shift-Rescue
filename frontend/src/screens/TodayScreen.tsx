@@ -1,14 +1,20 @@
-import type { ReactNode } from 'react'
-import { buildTodayColumns, formatCountdownParts, formatShiftTime } from '../domain/today'
 import {
-  type ApprovalRequest,
-  type OfferPreview,
-  type RescueCase,
+  buildTodayRows,
+  countActiveRescues,
+  escalationSummary,
+  formatClockTime,
+  formatCountdownParts,
+  formatShiftTime,
+  type TodayRow,
+} from '../domain/today'
+import {
   type Shift,
   type ShiftRole,
+  RoleOrder,
+  type ShiftStatus,
 } from '../domain/types'
 import { approvalKindLabel } from '../domain/approvals'
-import { useActiveRescues, usePendingApprovals, useTodayShifts } from '../services/hooks'
+import { useDayRescues, usePendingApprovals, useTodayShifts } from '../services/hooks'
 
 const TIMEZONE = 'Europe/Madrid'
 
@@ -20,17 +26,24 @@ const roleLabels: Record<ShiftRole, string> = {
   supervisor: 'Supervisor',
 }
 
-const previewDotClasses: Record<OfferPreview['status'], string> = {
-  pending: 'bg-green-accent',
-  accepted: 'bg-green-accent',
-  declined: 'bg-error',
+const statusLabels: Record<ShiftStatus, string> = {
+  scheduled: 'Scheduled',
+  absent: 'Absent',
+  open: 'Open',
+  covered: 'Covered',
 }
 
-const previewStatusLabel: Record<OfferPreview['status'], string> = {
-  pending: 'pending',
-  accepted: 'accepted',
-  declined: 'declined',
+/** Badge per row state: the old board columns, rendered as a badge. */
+const stateBadge: Record<TodayRow['state'], { label: string; className: string }> = {
+  uncovered: { label: 'Uncovered', className: 'bg-error/10 text-error' },
+  searching: { label: 'Searching', className: 'bg-green-accent text-white' },
+  'awaiting-approval': { label: 'Needs approval', className: 'bg-gold text-green-house' },
+  escalated: { label: 'Escalated', className: 'bg-error text-white' },
+  covered: { label: 'Covered', className: 'bg-green-light text-green-house' },
 }
+
+/** Honest caption for an uncovered row: what happened, no spin. */
+const uncoveredCaption = 'No candidates offered yet.'
 
 function formatLongDate(now: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
@@ -41,182 +54,154 @@ function formatLongDate(now: Date): string {
   }).format(now)
 }
 
-function shiftOf(rescue: RescueCase, shifts: Shift[]): Shift | undefined {
-  return shifts.find((s) => s.id === rescue.shiftId)
+function isUrgent(deadlineAt: string, now: Date): boolean {
+  return new Date(deadlineAt).getTime() - now.getTime() <= 5 * 60_000
 }
 
-function Column({
-  title,
-  count,
-  accent,
-  children,
-}: {
-  title: string
-  count: number
-  accent?: string
-  children: ReactNode
-}) {
+/** The countdown that matters for this row: the approval window when one is
+ * pending, otherwise the rescue deadline. */
+function rowDeadline(row: TodayRow): string {
+  const approval = row.approvals.find((a) => a.expiresAt !== undefined)
+  if (approval?.expiresAt !== undefined) {
+    return approval.expiresAt
+  }
+  return row.rescue!.deadlineAt
+}
+
+function RescueBadge({ state }: { state: TodayRow['state'] }) {
+  const badge = stateBadge[state]
   return (
-    <section aria-label={title} className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className={`text-base font-semibold tracking-tight ${accent ?? 'text-text-primary'}`}>
-          {title}
-        </h2>
-        <span className="flex size-5 items-center justify-center rounded-full bg-black/10 text-xs font-semibold text-text-secondary">
-          {count}
-        </span>
-      </div>
-      <div className="space-y-3">{children}</div>
-    </section>
+    <span
+      className={`inline-flex items-center rounded-pill px-3 py-1 text-xs font-semibold tracking-tight ${badge.className}`}
+    >
+      {badge.label}
+    </span>
   )
 }
 
-function Card({ topAccent, children }: { topAccent?: string; children: ReactNode }) {
+function Countdown({ deadline, now }: { deadline: string; now: Date }) {
+  const parts = formatCountdownParts(deadline, now)
   return (
-    <div className={`overflow-hidden rounded-card bg-surface shadow-card ${topAccent ?? ''}`}>
-      {children}
+    <p
+      className={`text-xl font-bold tracking-tight ${
+        isUrgent(deadline, now) ? 'text-error' : 'text-text-primary'
+      }`}
+    >
+      {parts.text}
+      <span className="ml-1 text-xs font-normal text-text-secondary">{parts.caption}</span>
+    </p>
+  )
+}
+
+/** Rescue cell: badge, compact countdown and the extra context the old
+ * seeking/approval cards carried (wave, absent employee, approval kind). */
+function RescueCell({
+  row,
+  now,
+  onOpenRescue,
+  onOpenApprovals,
+}: {
+  row: TodayRow
+  now: Date
+  onOpenRescue?: (rescueId: string) => void
+  onOpenApprovals?: () => void
+}) {
+  if (row.state === 'covered') {
+    return <span className="text-sm text-text-secondary">—</span>
+  }
+  return (
+    <div className="space-y-1">
+      <RescueBadge state={row.state} />
+      {row.state === 'uncovered' ? (
+        <p className="text-xs tracking-tight text-text-secondary">{uncoveredCaption}</p>
+      ) : row.state === 'escalated' ? (
+        // Terminal case: the outcome, never a countdown (feature T4), plus
+        // the §6.4 summary of what the agent already tried (feature T3).
+        <>
+          <p className="text-xs tracking-tight text-text-secondary">
+            Escalated at {formatClockTime(row.rescue!.deadlineAt, TIMEZONE)}
+          </p>
+          <p className="text-xs tracking-tight text-text-secondary">
+            {escalationSummary(row.rescue!)}
+          </p>
+        </>
+      ) : (
+        <>
+          {/* The countdown opens the rescue detail, like the old seeking card. */}
+          <button
+            type="button"
+            onClick={() => onOpenRescue?.(row.rescue!.id)}
+            aria-label={`Open rescue detail for ${roleLabels[row.shift.role]}`}
+            className="block cursor-pointer text-left"
+          >
+            <Countdown deadline={rowDeadline(row)} now={now} />
+          </button>
+          {row.rescue?.waveCurrent != null && row.rescue?.waveTotal != null && (
+            <p className="text-xs tracking-tight text-text-secondary">
+              wave {row.rescue.waveCurrent} of {row.rescue.waveTotal}
+            </p>
+          )}
+          {row.approvals.map((approval) => (
+            <p key={approval.id} className="text-xs tracking-tight text-text-secondary">
+              {approvalKindLabel(approval.kind)}
+              {approval.context.detail ? ` — ${approval.context.detail}` : ''}
+            </p>
+          ))}
+        </>
+      )}
+      {row.approvals.length > 0 && (
+        <button
+          type="button"
+          onClick={onOpenApprovals}
+          className="pointer-coarse:min-h-11 cursor-pointer rounded-pill bg-gold px-4 py-2 text-xs font-semibold tracking-tight text-green-house transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
+        >
+          Review approval
+        </button>
+      )}
     </div>
   )
 }
 
-function UncoveredCard({ shift }: { shift: Shift }) {
-  return (
-    <Card>
-      <div className="px-4 py-3">
-        <div className="flex items-baseline justify-between">
-          <p className="text-base font-semibold tracking-tight">{roleLabels[shift.role]}</p>
-          <p className="text-sm tracking-tight text-text-secondary">
-            {formatShiftTime(shift, TIMEZONE)}
-          </p>
-        </div>
-        <p className="mt-1 text-sm tracking-tight text-text-secondary">
-          No candidates offered yet.
-        </p>
-      </div>
-    </Card>
-  )
-}
-
-function SeekingCard({
-  rescue,
-  shift,
-  now,
-  onOpen,
+function RowActions({
+  row,
+  onOpenRescue,
 }: {
-  rescue: RescueCase
-  shift: Shift | undefined
-  now: Date
-  onOpen?: () => void
+  row: TodayRow
+  onOpenRescue?: (rescueId: string) => void
 }) {
-  const countdown = formatCountdownParts(rescue.deadlineAt, now)
-  const urgent = rescueCountdownUrgent(rescue.deadlineAt, now)
+  if (row.rescue === undefined) {
+    return <span className="text-sm text-text-secondary">—</span>
+  }
   return (
-    <button type="button" onClick={onOpen} className="block w-full cursor-pointer text-left">
-      <Card topAccent="border-t-4 border-green-accent">
-        <div className="px-4 py-3">
-          <div className="flex items-baseline justify-between">
-            <p className="text-base font-semibold tracking-tight">
-              {shift ? roleLabels[shift.role] : 'Shift'}
-            </p>
-            <p className="text-sm tracking-tight text-text-secondary">
-              {shift ? formatShiftTime(shift, TIMEZONE) : ''}
-            </p>
-          </div>
-          <p className={`mt-1 text-3xl font-bold tracking-tight ${urgent ? 'text-error' : 'text-text-primary'}`}>
-            {countdown.text}
-          </p>
-          <p className="mt-1 text-sm tracking-tight text-text-secondary">
-            Absent: {rescue.absentEmployeeName}
-            {rescue.waveCurrent != null && rescue.waveTotal != null && (
-              <> — wave {rescue.waveCurrent} of {rescue.waveTotal}.</>
-            )}
-          </p>
-          <ul className="mt-2 space-y-1">
-            {rescue.offerPreviews?.map((preview) => (
-              <li key={preview.employeeName} className="flex items-center justify-between text-sm tracking-tight">
-                <span className="flex items-center gap-2">
-                  <span className={`size-2 rounded-full ${previewDotClasses[preview.status]}`} />
-                  {preview.employeeName}
-                </span>
-                <span className="text-text-secondary">{previewStatusLabel[preview.status]}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </Card>
+    <button
+      type="button"
+      onClick={() => onOpenRescue?.(row.rescue!.id)}
+      className="pointer-coarse:min-h-11 cursor-pointer rounded-pill border border-black/10 bg-surface px-4 py-2 text-xs font-semibold tracking-tight text-text-primary transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
+    >
+      View detail
     </button>
   )
 }
 
-function rescueCountdownUrgent(deadlineAt: string, now: Date): boolean {
-  const msLeft = new Date(deadlineAt).getTime() - now.getTime()
-  return msLeft <= 5 * 60_000
-}
-
-function ApprovalCard({
-  approval,
-  now,
-  onReview,
-}: {
-  approval: ApprovalRequest
-  now: Date
-  onReview?: () => void
-}) {
-  const deadline = approvalExpiresAt(approval)
-  const countdown = deadline ? formatCountdownParts(deadline, now) : undefined
+/** Employee cell: assigned name, "Unassigned" when open, "(absent)" marker. */
+function EmployeeName({ shift }: { shift: Shift }) {
+  if (shift.assigneeName === null) {
+    return <span className="text-text-secondary">Unassigned</span>
+  }
   return (
-    <Card topAccent="border-t-4 border-gold">
-      <div className="px-4 py-3">
-        <div className="flex items-baseline justify-between">
-          <p className="text-base font-semibold tracking-tight">
-            {approvalKindLabel(approval.kind)}
-          </p>
-          <p className="text-sm tracking-tight text-text-secondary">
-            {approval.context.shiftTime}
-          </p>
-        </div>
-        <p className="mt-1 text-3xl font-bold tracking-tight text-text-primary">
-          {countdown ? countdown.text : '--:--'}
-        </p>
-        <p className="mt-1 text-sm tracking-tight text-text-secondary">
-          {approval.context.employeeName}
-          {approval.context.detail ? ` — ${approval.context.detail}` : ''}
-        </p>
-        <button
-          type="button"
-          onClick={onReview}
-          className="mt-3 w-full cursor-pointer rounded-pill bg-gold px-4 py-2 text-sm font-semibold tracking-tight text-green-house transition-all duration-200 ease-in-out hover:opacity-90 active:scale-[0.98]"
-        >
-          Review approval
-        </button>
-      </div>
-    </Card>
+    <span>
+      {shift.assigneeName}
+      {shift.status === 'absent' ? ' (absent)' : null}
+    </span>
   )
 }
 
-function approvalExpiresAt(approval: ApprovalRequest): string | undefined {
-  return approval.expiresAt
-}
-
-function CoveredCard({ shift }: { shift: Shift }) {
-  return (
-    <Card topAccent="border-t-4 border-green-accent">
-      <div className="px-4 py-3">
-        <p className="text-base font-semibold tracking-tight">
-          {roleLabels[shift.role]} · {formatShiftTime(shift, TIMEZONE).replace(' – ', '-')}
-        </p>
-        <p className="mt-1 text-sm tracking-tight text-text-secondary">
-          Covered by {shift.assigneeName}
-        </p>
-      </div>
-    </Card>
-  )
-}
+const HEAD_CELLS = ['Role', 'Window', 'Employee', 'Status', 'Rescue', 'Actions'] as const
 
 export interface TodayScreenProps {
   /** Injected clock for deterministic tests; defaults to now. */
   now?: Date
-  /** Called with the rescue id when the user opens a rescue from a card. */
+  /** Called with the rescue id when the user opens a rescue from a row. */
   onOpenRescue?: (rescueId: string) => void
   /** Called when the user asks to review approvals. */
   onOpenApprovals?: () => void
@@ -225,8 +210,13 @@ export interface TodayScreenProps {
 export function TodayScreen({ now = new Date(), onOpenRescue, onOpenApprovals }: TodayScreenProps) {
   const dayIso = now.toISOString().slice(0, 10)
   const { shifts, isLoading } = useTodayShifts(dayIso)
-  const { rescues } = useActiveRescues()
+  // The board reads the day's cases, terminal included; the active-rescue
+  // counter keeps its own, narrower measure (feature manager-can-act T3).
+  const { rescues } = useDayRescues()
   const { approvals } = usePendingApprovals()
+  const activeCount = countActiveRescues(rescues ?? [])
+
+  const rows = buildTodayRows(shifts ?? [], rescues ?? [], approvals ?? [], RoleOrder)
 
   return (
     <div className="space-y-6">
@@ -239,53 +229,103 @@ export function TodayScreen({ now = new Date(), onOpenRescue, onOpenApprovals }:
         </div>
         <span className="flex items-center gap-2 rounded-pill border border-error bg-surface px-4 py-2 text-sm font-semibold tracking-tight text-error">
           <span className="size-2 rounded-full bg-error" />
-          {rescues?.length ?? 0} active rescues
+          {activeCount} active rescues
         </span>
       </div>
 
       {isLoading ? (
         <p className="text-base text-text-secondary">Loading…</p>
       ) : (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
-          <Column title="Uncovered" count={columns(shifts, rescues, approvals).uncovered.length}>
-            {columns(shifts, rescues, approvals).uncovered.map((shift) => (
-              <UncoveredCard key={shift.id} shift={shift} />
-            ))}
-          </Column>
-          <Column title="Searching" count={columns(shifts, rescues, approvals).seeking.length}>
-            {columns(shifts, rescues, approvals).seeking.map((rescue) => (
-              <SeekingCard
-                key={rescue.id}
-                rescue={rescue}
-                shift={shiftOf(rescue, shifts ?? [])}
-                now={now}
-                onOpen={() => onOpenRescue?.(rescue.id)}
-              />
-            ))}
-          </Column>
-          <Column
-            title="Needs your approval"
-            count={columns(shifts, rescues, approvals).needsApproval.length}
+        <>
+          {/* Phone: one card per shift. */}
+          <ul
+            data-testid="today-cards"
+            aria-label="Today's shifts"
+            className="space-y-3 md:hidden"
           >
-            {columns(shifts, rescues, approvals).needsApproval.map((approval) => (
-              <ApprovalCard key={approval.id} approval={approval} now={now} onReview={onOpenApprovals} />
+            {rows.map((row) => (
+              <li
+                key={row.shift.id}
+                className="rounded-card bg-surface px-4 py-3 shadow-card"
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="text-base font-semibold tracking-tight">
+                    {roleLabels[row.shift.role]}
+                  </p>
+                  <p className="text-sm tracking-tight text-text-secondary">
+                    {formatShiftTime(row.shift, TIMEZONE)}
+                  </p>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm tracking-tight">
+                    <EmployeeName shift={row.shift} />
+                    <span className="text-text-secondary"> · {statusLabels[row.shift.status]}</span>
+                  </p>
+                  <RescueBadge state={row.state} />
+                </div>
+                <div className="mt-2">
+                  <RescueCell
+                    row={row}
+                    now={now}
+                    onOpenRescue={onOpenRescue}
+                    onOpenApprovals={onOpenApprovals}
+                  />
+                </div>
+                <div className="mt-2">
+                  <RowActions row={row} onOpenRescue={onOpenRescue} />
+                </div>
+              </li>
             ))}
-          </Column>
-          <Column title="Covered today" count={columns(shifts, rescues, approvals).covered.length}>
-            {columns(shifts, rescues, approvals).covered.map((shift) => (
-              <CoveredCard key={shift.id} shift={shift} />
-            ))}
-          </Column>
-        </div>
+          </ul>
+
+          {/* Tablet and up: the dashboard table. */}
+          <div
+            data-testid="today-table"
+            className="hidden overflow-x-auto rounded-card bg-surface px-4 py-2 shadow-card md:block"
+          >
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-black/5 text-xs uppercase tracking-wider text-text-secondary">
+                  {HEAD_CELLS.map((cell) => (
+                    <th key={cell} className="py-3 pr-4 font-medium">
+                      {cell}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.shift.id} className="border-b border-black/5 align-top last:border-0">
+                    <td className="py-3 pr-4 text-sm font-semibold tracking-tight">
+                      {roleLabels[row.shift.role]}
+                    </td>
+                    <td className="py-3 pr-4 text-sm tracking-tight text-text-secondary">
+                      {formatShiftTime(row.shift, TIMEZONE)}
+                    </td>
+                    <td className="py-3 pr-4 text-sm tracking-tight">
+                      <EmployeeName shift={row.shift} />
+                    </td>
+                    <td className="py-3 pr-4 text-sm tracking-tight text-text-secondary">
+                      {statusLabels[row.shift.status]}
+                    </td>
+                    <td className="py-3 pr-4">
+                      <RescueCell
+                        row={row}
+                        now={now}
+                        onOpenRescue={onOpenRescue}
+                        onOpenApprovals={onOpenApprovals}
+                      />
+                    </td>
+                    <td className="py-3">
+                      <RowActions row={row} onOpenRescue={onOpenRescue} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   )
-}
-
-function columns(
-  shifts: Shift[] | undefined,
-  rescues: RescueCase[] | undefined,
-  approvals: ApprovalRequest[] | undefined,
-) {
-  return buildTodayColumns(shifts ?? [], rescues ?? [], approvals ?? [])
 }

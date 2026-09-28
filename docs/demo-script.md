@@ -1,83 +1,137 @@
-# Demo video script (2–3 minutes)
+# Demo walkthrough — from an absence to a manager decision
 
-**Format:** split screen — left: the employee's phone (WhatsApp); right: the
-manager dashboard. Recorded against the deployed demo.
+A newcomer-friendly walkthrough of the demo: what each screen is for, how to
+produce a rescue from the Simulator, how a case moves through its states, and
+what the manager does when a case escalates. Deploy and access instructions,
+credentials and troubleshooting live in `docs/runbook.md` — this page is the
+tour, not the ops manual.
 
-**Cast (seeded, all fictional):** Iker Mendoza (`emp_09_floor`, the absent
-employee), Marta López (`emp_13_floor`, the covering employee), Javier Prado
-(the manager account).
-
----
-
-## 0:00–0:20 · The problem (voiceover over the dashboard)
-
-> "When someone calls in sick in a restaurant, it is almost always less than two
-> hours before their shift, by WhatsApp, to the manager — who is in the middle
-> of service. Covering that gap costs them 30 to 60 minutes of messages and
-> calls, and they don't know who is available, who has already closed the night
-> before, or who is close to their hour limit."
-
-## 0:20–0:45 · The absence arrives
-
-- **Left (phone, Iker):** send `me encuentro fatal, hoy no puedo ir`.
-- **Voiceover:** "The agent asks for an explicit confirmation — it never opens a
-  rescue by guessing — and it never asks why."
-- **Left:** the agent replies asking to confirm.
-
-## 0:45–1:05 · The rescue opens (dashboard)
-
-- **Right:** refresh **Today**. The shift moves into the **Searching** column
-  with a live countdown; the manager already has a notice.
-- **Voiceover:** "The absent shift is marked in the HR system, the manager is
-  notified, and the eligibility engine filters candidates: role, overlap,
-  minimum rest, weekly hour caps, recent coverages."
-
-## 1:05–1:30 · The offer reaches a real phone
-
-- **Left (phone, Iker):** reply `SÍ`.
-- **Left (phone, Marta):** the offer arrives: *"Hola Marta López, soy el
-  asistente de turnos… ¿Puedes cubrirlo?"*
-- **Voiceover:** "Offers go out in waves of three, ranking by fairness,
-  proximity and preference — never by how often someone has said yes before."
-
-## 1:30–2:00 · Acceptance and coverage
-
-- **Left (phone, Marta):** reply `SÍ` → she receives the confirmation.
-- **Right:** the card moves to **Covered today**, showing who covered it; open
-  **Rescue detail** to show the live timeline.
-- *(Optional, if recording a conditional acceptance: show the gold
-  "Review approval" card → **Approvals** → Approve → the case becomes
-  partially covered.)*
-
-## 2:00–2:25 · The agent is observable and measurable
-
-- **Right:** **Agent decisions** — every interpretation with intent,
-  confidence bar, model, cost, latency and validation result.
-- **Right:** **Operations** — LLM cost, p95 latency, low-confidence rate, stuck
-  rescues and active alerts.
-- **Voiceover:** "The LLM only interprets language and drafts replies: every
-  output is validated, has no ability to assign anything, and one trace per
-  rescue lands in Langfuse."
-
-## 2:25–3:00 · Evals and closing
-
-- **Right:** **Evals** — intent accuracy against the threshold, per-scenario
-  results and the invariants counter: **0 violations**.
-- **Voiceover over the architecture slide:** "FastAPI, Celery and PostgreSQL
-  run the deterministic core; React shows the manager the truth; the WhatsApp
-  channel is Twilio. The seven invariants — one person per shift, no offers to
-  ineligible staff, no assignment without approval, no messages during quiet
-  hours, one offer per person, full audit trail, and no health details leaving
-  the conversation — are enforced by code and checked by an evaluation suite
-  that runs on CI."
+**Cast (seeded, all fictional):** Iker Mendoza (a floor employee), Marta López
+(a candidate), Demo Manager (`manager@laterraza.demo`, the account you log in
+with). All data is demo data at "La Terraza del Puerto".
 
 ---
 
-### Recording checklist
+## 1. What each screen is for
 
-1. Deploy the demo and confirm `https://<domain>/health` is OK.
-2. Have both phones joined to the Twilio sandbox (`join <code>`).
-3. Reset the day: `make seed` on the instance so today has shifts.
-4. Close any pending approvals from previous takes.
-5. Record at 1080p, browser zoom 100 %, both windows side by side.
-6. Keep the countdown visible — it is the strongest visual proof of urgency.
+| Screen | Purpose |
+|---|---|
+| **Today** | The manager's home. One row per shift of the day with its live state: Uncovered, Searching, Needs approval, Escalated, or Covered, plus the active-rescue counter and a countdown while something is pending. |
+| **Simulator** | Employee phones. You write as any employee; the message travels the same pipeline as a real WhatsApp message. This is where every demo rescue starts. |
+| **Approvals** | The inbox of conditional acceptances (overtime, partial coverage) that need a manager decision. |
+| **Rescue detail** | Everything about one case: the agent's timeline ("What the agent did"), the candidates and what each answered, and the manager actions (approve/reject, Close case). |
+| **Agent decisions** (operator) | Every LLM interpretation with intent, confidence, model, cost and latency. |
+| **Operations** (operator) | LLM cost, p95 latency, low-confidence rate, stuck rescues and alerts. |
+| **Evals** (operator) | Intent accuracy and the invariant checks. |
+| **Settings** | Pause the agent, quiet hours, wave configuration. |
+
+## 2. Before you start
+
+1. Deploy and smoke-test per `docs/runbook.md` §3–4: `api`, `worker`, `beat`,
+   `redis` and `postgres` must all be up. The worker is what makes the agent
+   reply — without it nothing below happens.
+2. Log in to the dashboard with the demo manager account.
+3. **Step 0 — reset the demo data** (Simulator → *Reset demo data*, then
+   confirm). One click deletes every rescue, message and offer of the demo
+   plus the shifts from today onwards, reseeds the schedule and puts the demo
+   clock back on real time. Do this before anything else: leftovers from
+   previous runs are the main source of demo confusion — threads answering
+   about shifts that already closed, an old `[template: offer]` placeholder,
+   a clock left hours ahead (advances are clamped at ±6 h, but any offset
+   displaces the screens).
+4. Open **Simulator**. Each frame is labelled with the employee's situation
+   against the current time — *On shift now*, *Starts at HH:MM*, *Ended at
+   HH:MM*, *No shift today*. Only an *On shift now* employee can report an
+   absence; the agent correctly answers "out of scope" to anyone else. Every
+   frame opens its real thread — an employee who has not written yet shows an
+   empty thread instead of an error, and you can write the first message.
+
+## 3. Produce a rescue from the Simulator (about a minute)
+
+1. Pick an *On shift now* frame and type the absence, e.g.
+   `me encuentro fatal, hoy no puedo ir`. Send it. The message enters the real
+   pipeline (the API enqueues the same task a Twilio webhook would).
+2. **The agent takes ~10 seconds to reply** (worker + LLM). The frame shows
+   *"the agent is replying…"* and blocks duplicate sends; when the answer
+   lands it appears in the thread by itself — no reload — and the Today board
+   refreshes.
+3. The agent asks for an explicit confirmation: reply `SÍ` in the same frame,
+   **and do it promptly**. ⏱️ The confirmation has a deadline: for a shift that
+   has *already started* you have **10 minutes** (spec §5.3: `start − 30 min`, or
+   `opened + 10 min` when that has already passed). If the answer arrives later
+   the rescue has already escalated to the manager — the agent will then explain
+   that instead of confirming, which is correct but makes a confusing demo. For a
+   calmer walkthrough pick an employee whose shift *starts later* (the frame says
+   *Starts at HH:MM*): the window runs until half an hour before that shift.
+4. On confirmation the rescue opens: the shift is marked absent in the HR
+   system, the manager gets a notice, and the first wave of offers goes out.
+
+## 4. How the case moves through its states
+
+Watch the shift's row on **Today** (cards on a phone, table from tablet up):
+
+| State | What it means | What the row shows |
+|---|---|---|
+| **Searching** | Offers are out, waiting for answers. | Live countdown, wave number. |
+| **Needs approval** | A candidate accepted conditionally (overtime or partial coverage). | Countdown on the approval window plus a *Review approval* button. |
+| **Covered** | Someone took the shift. | The covered employee; no countdown — nothing is pending. |
+| **Escalated** | The deadline passed (or candidates ran out) and the manager was notified. | *Escalated at HH:MM* and a summary of who was contacted and what each answered — never "Uncovered". |
+
+Each state change is one click away from the full story: *View detail* opens
+the rescue detail with the agent timeline and the candidates.
+
+**Skip the waiting:** the demo clock (Simulator, *+10 min* / *+1h*) moves the
+shared virtual time, so deadlines and escalations happen in seconds. The total
+offset is clamped to **±6 hours** — past that the clock just stops, because a
+day shifted far ahead turns every shift into "already finished". Broker
+timers keep their real-time ETA — the Simulator says so in one line.
+
+**A late acceptance is not lost.** When a case escalates, the offers that are
+still open **stay open on purpose** (spec §5: *aceptación después del escalado*).
+If a candidate finally answers `SÍ`, the case comes back as an approval request
+for the manager instead of being silently dropped — a good beat to show after
+the escalation: the system gives up on the deadline, never on the shift.
+
+## 5. What the manager does when a case escalates
+
+The escalation is where the manager takes over — the system did its best and
+is honest about it:
+
+1. **Find it on Today.** The row reads **Escalated** with *Escalated at HH:MM*
+   and the §6.4-style summary of what the agent already tried, e.g.
+   `Contacted: Marta L. (no reply yet), Ivan R. (declined).` No health
+   details, ever — who was contacted and what each answered is all it says.
+2. **Open the detail** (*View detail*). Read the timeline and the candidate
+   list to see exactly what happened and what options remain.
+3. **Resolve it outside the system** — a quick call, or a fix in the rota.
+   The detail screen says exactly that: the manager resolves, the system
+   records it.
+4. **Close the case from the detail screen**: press **Close case**, confirm,
+   and the write is queued (202) — the board updates a moment later when the
+   worker applies it. The row stops reading Escalated and the active-rescue
+   counter drops.
+
+Optional, and the best proof that nothing is lost: before closing, go back to the
+Simulator and have a candidate whose offer is still open answer `SÍ`. The case
+returns to the manager as an **approval request** (spec §5), so a shift can still
+be covered after the deadline — the agent stops waiting, the manager decides.
+
+Answering late is not a dead end: if the employee writes after the case closed,
+the agent tells them the outcome (it escalated, it was covered, or the manager
+closed it) and — since every reply is stored in the thread — it shows up in
+**Conversations** as well as on their phone.
+
+If instead a case is **awaiting approval** (a conditional acceptance), the
+manager acts right on the detail screen: **Approve** or **Reject** inline, and
+the case moves on without leaving the page.
+
+## 6. Recording checklist (for the 2–3 minute video)
+
+1. Both windows side by side: Simulator (left) and Today (right), 1080p,
+   browser zoom 100 %.
+2. Reset the demo data and the clock in one click (Simulator → *Reset demo
+   data*; runbook §5).
+3. Walk §3 → §4 → §5 of this page in order; the countdown while Searching and
+   the Escalated summary are the two shots worth holding on.
+4. Finish with the manager close — it is the proof the loop ends with a human
+   decision, not a timeout.

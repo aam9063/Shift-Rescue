@@ -24,7 +24,13 @@ export interface Shift {
   status: ShiftStatus
 }
 
-export type RescueStatus = 'OPEN' | 'OFFERING' | 'AWAITING_APPROVAL' | 'COVERED' | 'ESCALATED'
+export type RescueStatus =
+  | 'OPEN'
+  | 'OFFERING'
+  | 'AWAITING_APPROVAL'
+  | 'COVERED'
+  | 'ESCALATED'
+  | 'CLOSED_BY_MANAGER'
 
 export type OfferPreviewStatus = 'pending' | 'declined' | 'accepted'
 
@@ -78,6 +84,8 @@ export type OfferStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'COUNTER_PROPOSE
 export interface Offer {
   id: string
   rescueId: string
+  /** Always present from the live API; the offline mock predates the field. */
+  employeeId?: string
   employeeName: string
   waveNumber: number
   status: OfferStatus
@@ -131,4 +139,18 @@ export interface ApprovalRequest {
     shiftTime: string
     detail?: string
   }
+}
+
+/* Demo simulator (spec §7.5/§7.6): the roster the Simulator screen renders. */
+
+export interface SimulatorEmployee {
+  id: string
+  displayName: string
+  roles: string[]
+  /** Today's first shift window and status; null when not scheduled today. */
+  shiftStartsAt: string | null
+  shiftEndsAt: string | null
+  shiftStatus: string | null
+  /** The employee's real conversation; null until the first message. */
+  conversationId: string | null
 }

@@ -36,3 +36,6 @@ Desktop.ini
 # Local editor state
 .idea/
 .vscode/
+# Eval runs: local artifacts, one per run (sizes and model outputs)
+evals/reports/
+

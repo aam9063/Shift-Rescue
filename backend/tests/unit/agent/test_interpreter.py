@@ -4,7 +4,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.agent.interpreter import MessageInterpreter
+from app.agent.interpreter import PROMPT_VERSION, MessageInterpreter
 from app.agent.schemas import Interpretation
 
 VALID = {
@@ -51,8 +51,25 @@ async def test_valid_response_is_validated_and_returned() -> None:
     assert isinstance(result, Interpretation)
     assert result.intent == "OFFER_ACCEPT"
     assert result.confidence == 0.97
-    assert result.prompt_version == "interpreter_v1"
+    assert result.prompt_version == PROMPT_VERSION
     assert llm.calls[0][1]["rescue_id"] == "case_1"
+
+
+async def test_full_structured_payload_with_prompt_version_is_accepted() -> None:
+    """The real LLMClient returns the entire Interpretation dump, prompt_version
+    included; the interpreter must overwrite it instead of raising TypeError."""
+    payload = Interpretation(
+        intent="OFFER_ACCEPT", confidence=0.91, prompt_version=PROMPT_VERSION
+    ).model_dump()
+    assert payload["prompt_version"] == PROMPT_VERSION
+    llm = FakeLLM([payload])
+    interpreter = MessageInterpreter(llm=llm, prompt_version="interpreter_v2")
+
+    result = await interpreter.interpret("sí voy", {})
+
+    assert result.intent == "OFFER_ACCEPT"
+    assert result.prompt_version == "interpreter_v2"
+    assert len(llm.calls) == 1  # no spurious retry, no fallback
 
 
 async def test_invalid_output_retried_once_with_validation_error() -> None:
@@ -109,3 +126,22 @@ async def test_low_confidence_is_returned_untouched_for_caller_decision() -> Non
     assert result.intent == "QUESTION"
     assert result.confidence == 0.4
     assert interpreter.confidence_threshold == 0.75
+
+
+class UsageReportingLLM(FakeLLM):
+    def __init__(self, responses: list[dict | Exception], usage: dict) -> None:
+        super().__init__(responses)
+        self.last_usage: dict = usage
+
+
+async def test_last_usage_delegates_to_a_usage_reporting_client() -> None:
+    usage = {"model": "claude-haiku-4-5", "input_tokens": 120, "output_tokens": 30}
+    interpreter = MessageInterpreter(llm=UsageReportingLLM([VALID], usage))
+
+    assert interpreter.last_usage == usage
+
+
+async def test_last_usage_is_none_for_a_client_without_metering() -> None:
+    interpreter = MessageInterpreter(llm=FakeLLM([VALID]))
+
+    assert interpreter.last_usage is None

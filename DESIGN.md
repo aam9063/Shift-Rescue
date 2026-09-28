@@ -898,3 +898,27 @@ When refining existing screens generated with this design system:
 
 - Starbucks Visa Card / Starbucks-Card (SVC) detailed mockup specs are hinted at by `--svcRoundedCorners` and `--svcShadowFilter` tokens but not fully documented
 
+
+## Appendix A. Dashboard adoption of the responsive contract (§8)
+
+The Shift Rescue dashboard (frontend) adopts §8 as follows. §8 remains the
+contract; this appendix only records what is implemented.
+
+- **Breakpoints.** Tailwind's default scale maps onto §8: `md` (768px) is the
+  tablet breakpoint, `lg` (1024px) desktop, `xl` (1280px) toward xlarge. No
+  custom breakpoints and no JavaScript media queries: variants are
+  CSS-controlled classes (`md:hidden`, `hidden md:flex`, ...).
+- **Navigation.** Below the tablet breakpoint the desktop navs
+  (`hidden md:flex` / `hidden lg:flex`) are replaced by a `md:hidden`
+  hamburger drawer listing every destination from both groups, with the same
+  gold active indicator on the House Green band, a gold focus ring,
+  `Escape`-to-close and close-on-navigate.
+- **Wide data.** Tables keep their desktop rendering from `md` up and gain a
+  stacked card list below `md`, rendered as CSS-controlled siblings
+  (`md:hidden` / `hidden md:block`); every table container carries
+  `overflow-x-auto` as a safety net.
+- **Touch targets.** Pills and actions reach the 44px floor on touch surfaces
+  via the `pointer-coarse:` variants (`pointer-coarse:min-h-11`), leaving the
+  desktop look untouched; drawer items are always 44px (`min-h-11`).
+- **Gutters.** 16 -> 24 -> 40px (`px-4` -> `md:px-6` -> `lg:px-10`), matching
+  the existing header and rescue-detail padding.

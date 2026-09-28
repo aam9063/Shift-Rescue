@@ -5,6 +5,7 @@ inside the webhook. External effects happen after state is persisted, and
 every state change writes an AuditEvent (invariant 6, §5.4).
 """
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
@@ -32,8 +33,9 @@ from app.db.models import (
     Offer,
     RescueCase,
 )
+from app.db.models import Interpretation as InterpretationRow
 from app.domain.eligibility import evaluate_eligibility
-from app.domain.entities import EligibilityResult, RescueSettings
+from app.domain.entities import EligibilityResult, RescueSettings, ShiftSlot
 from app.domain.entities import Employee as EmployeeEntity
 from app.domain.parser import Intent, parse_message
 from app.domain.quiet_hours import next_quiet_end, offers_allowed
@@ -58,6 +60,10 @@ class OrchestratorConfig:
     min_deadline_minutes: int = MIN_DEADLINE_MINUTES
     # Spec §9.4: cap outbound messages per employee per hour (0 disables it).
     max_outbound_per_hour: int = 3
+
+
+# How far back a closed case is still worth explaining to the employee.
+RECENT_CASE_WINDOW_HOURS = 6
 
 
 class RescueOrchestrator:
@@ -89,10 +95,10 @@ class RescueOrchestrator:
         text: str,
     ) -> None:
         now = self._clock.now()
-        persisted = await self._persist_inbound(
+        message_id = await self._persist_inbound(
             conversation_id, employee_id, provider_message_id, text
         )
-        if not persisted:
+        if message_id is None:
             return  # duplicate provider message: processed once (spec §7.4)
 
         # Spec §9.3: a paused agent does nothing — the manager takes over.
@@ -102,21 +108,48 @@ class RescueOrchestrator:
 
         if self.interpreter is not None:
             try:
-                llm_context = {
+                llm_context: dict[str, Any] = {
                     "rescue_id": None,
                     "pending_offers": await self._pending_offer_ids(employee_id),
+                    "accepted_offers": await self._accepted_offer_ids(employee_id),
                 }
+                # The shift list with ids: the model cannot resolve "which
+                # shift?" without it. Same fixture/production contract as the
+                # pending markers below — the eval fixtures describe it, so
+                # production must send it.
+                choices = await self._shift_choices(employee_id, now)
+                if choices:
+                    llm_context["shifts_48h"] = choices
+                    # Day anchor: dated candidates only let the model map
+                    # "el de hoy" / "el de mañana" onto one shift if it knows
+                    # which date is today (the deterministic path uses the
+                    # clock directly).
+                    llm_context["today"] = await self._today_marker(employee_id, now)
+                    # Only while the last thing the agent asked was which
+                    # shift to cancel: then the same candidates are the
+                    # pending choice the reply must resolve.
+                    if await self._asked_which_shift(conversation_id):
+                        llm_context["pending_shift_choice"] = choices
+                # The interpreter needs to know that a confirmation is pending,
+                # otherwise a bare "sí" reads as an answer with nothing to
+                # answer (the prompt sends it to UNCLEAR) and the absence is
+                # never confirmed. Same class of defect as the withdrawal
+                # marker: state the model needs must be sent, not guessed.
+                awaiting = await self._case_awaiting_confirmation(employee_id)
+                if awaiting is not None:
+                    llm_context["pending_confirmation"] = awaiting
                 interpreted = await self.interpreter.interpret(text, llm_context)
             except (CircuitOpenError, ProviderUnavailableError):
                 interpreted = None  # degraded mode: deterministic parser (§9.3)
 
             if interpreted is not None:
-                await self._route_interpreted(conversation_id, employee_id, interpreted)
+                await self._persist_interpretation(message_id, interpreted)
+                await self._route_interpreted(conversation_id, employee_id, text, interpreted)
                 return
 
         parsed = parse_message(text)
         if parsed.intent == Intent.ABSENCE_REPORT:
-            await self._handle_absence_report(conversation_id, employee_id)
+            await self._handle_absence_report(conversation_id, employee_id, text=text)
         elif parsed.intent == Intent.CONFIRM and (
             parsed.proposed_start or parsed.proposed_end
         ) and await self._has_pending_offer(employee_id):
@@ -147,11 +180,16 @@ class RescueOrchestrator:
             await self._send_out_of_scope(conversation_id, employee_id)
 
     async def _route_interpreted(
-        self, conversation_id: str, employee_id: str, interpreted: Any
+        self, conversation_id: str, employee_id: str, text: str, interpreted: Any
     ) -> None:
         intent = interpreted.intent
         if intent == "ABSENCE_REPORT":
-            await self._handle_absence_report(conversation_id, employee_id)
+            await self._handle_absence_report(
+                conversation_id,
+                employee_id,
+                text=text,
+                shift_reference=interpreted.shift_reference,
+            )
         elif intent == "ABSENCE_CONFIRM":
             await self._handle_confirmation(conversation_id, employee_id)
         elif intent == "OFFER_ACCEPT":
@@ -187,6 +225,12 @@ class RescueOrchestrator:
 
     async def _clarify_once(self, conversation_id: str, employee_id: str) -> None:
         """A single clarification per conversation, then a polite redirect (§5.5)."""
+        if await self._asked_which_shift(conversation_id):
+            # The open question is "which shift?": clarify by asking it again
+            # (at most once more), never with a yes/no prompt that makes no
+            # sense as an answer to a choice between shifts.
+            await self._ask_which_shift_again(conversation_id, employee_id)
+            return
         async with self._sessions() as session:
             asked = (
                 await session.execute(
@@ -304,6 +348,30 @@ class RescueOrchestrator:
             ).scalars()
             return [o.id for o in offers]
 
+    async def _accepted_offer_ids(self, employee_id: str) -> list[str]:
+        """Ids of the employee's accepted offers whose rescue case is still live.
+
+        An accepted offer always implies a non-OPEN case (acceptance moves it to
+        COVERED/PARTIALLY_COVERED), so "still open" here means not yet finally
+        resolved: the rescue can still reopen when the covering employee
+        withdraws (spec §5.5). Statuses verified in `app/db/models.py`.
+        """
+        async with self._sessions() as session:
+            offers = (
+                await session.execute(
+                    select(Offer)
+                    .join(RescueCase, RescueCase.id == Offer.rescue_id)
+                    .where(
+                        Offer.employee_id == employee_id,
+                        Offer.status == "ACCEPTED",
+                        RescueCase.status.notin_(
+                            [State.CLOSED_BY_MANAGER.value, State.CANCELLED.value]
+                        ),
+                    )
+                )
+            ).scalars()
+            return [o.id for o in offers]
+
     async def _agent_is_paused(self, employee_id: str) -> bool:
         location_id = await self._location_of(employee_id)
         if location_id is None:
@@ -354,7 +422,8 @@ class RescueOrchestrator:
         employee_id: str,
         provider_message_id: str,
         text: str,
-    ) -> bool:
+    ) -> str | None:
+        """Persist one inbound message; returns its id, or None on a duplicate."""
         async with self._sessions() as session:
             existing = (
                 await session.execute(
@@ -362,12 +431,13 @@ class RescueOrchestrator:
                 )
             ).scalar_one_or_none()
             if existing is not None:
-                return False
+                return None
 
+            message_id = f"msg_{uuid4().hex}"
             await self._get_or_create_conversation(session, conversation_id, employee_id)
             session.add(
                 Message(
-                    id=f"msg_{uuid4().hex}",
+                    id=message_id,
                     conversation_id=conversation_id,
                     direction="inbound",
                     provider_message_id=provider_message_id,
@@ -378,8 +448,48 @@ class RescueOrchestrator:
             try:
                 await session.commit()
             except IntegrityError:
-                return False
-            return True
+                return None
+            return message_id
+
+    async def _persist_interpretation(self, message_id: str, interpreted: Any) -> None:
+        """Best effort: one row per LLM interpretation (spec §7.6).
+
+        `extracted` carries the structured fields only — message bodies and
+        health details are never stored (spec §10). A failure to persist is
+        logged and never breaks the rescue flow.
+        """
+        try:
+            usage = self.interpreter.last_usage if self.interpreter is not None else None
+            extracted = {
+                "shift_reference": interpreted.shift_reference,
+                "offer_reference": interpreted.offer_reference,
+                "proposed_start": interpreted.proposed_start,
+                "proposed_end": interpreted.proposed_end,
+                "contains_health_details": interpreted.contains_health_details,
+                "question_text": interpreted.question_text,
+            }
+            async with self._sessions() as session:
+                session.add(
+                    InterpretationRow(
+                        message_id=message_id,
+                        intent=interpreted.intent,
+                        confidence=interpreted.confidence,
+                        extracted=extracted,
+                        model=str((usage or {}).get("model") or "unknown"),
+                        prompt_version=interpreted.prompt_version,
+                        latency_ms=int((usage or {}).get("latency_ms") or 0),
+                        input_tokens=int((usage or {}).get("input_tokens") or 0),
+                        output_tokens=int((usage or {}).get("output_tokens") or 0),
+                        cost_usd=float((usage or {}).get("cost_usd") or 0.0),
+                    )
+                )
+                await session.commit()
+        except Exception as error:
+            structlog.get_logger(__name__).warning(
+                "interpretation_persist_failed",
+                message_id=message_id,
+                error=str(error)[:200],
+            )
 
     async def _get_or_create_conversation(
         self, session: AsyncSession, conversation_id: str, employee_id: str
@@ -396,7 +506,13 @@ class RescueOrchestrator:
 
     # --- absence report ------------------------------------------------------
 
-    async def _handle_absence_report(self, conversation_id: str, employee_id: str) -> None:
+    async def _handle_absence_report(
+        self,
+        conversation_id: str,
+        employee_id: str,
+        text: str = "",
+        shift_reference: str | None = None,
+    ) -> None:
         now = self._clock.now()
         location_id = await self._location_of(employee_id)
         employee = await self._employee(employee_id)
@@ -405,23 +521,34 @@ class RescueOrchestrator:
 
         shifts = await self._upcoming_shifts_of(employee_id, now)
         if len(shifts) > 1:
-            # Ambiguity: ask which shift, never guess (spec §5.5).
-            shift_list = ", ".join(
-                f"{self._role_label(s.role)} {self._fmt(s.starts_at)}-{self._fmt(s.ends_at)}"
-                for s in shifts
+            # Ambiguity: resolve the reply to exactly one shift, never guess
+            # between two candidates (spec §5.5).
+            _, tz_name = await self._location_info(location_id)
+            target = self._resolve_shift_reference(
+                shifts, shift_reference, text, now, tz_name
             )
-            await self._send_template(
-                to=self._phone_of(employee),
-                template_key="ask_which_shift",
-                employee_name=employee["full_name"],
-                shift_list=shift_list,
-            )
-            return
-        if len(shifts) == 0:
+            if target is None:
+                await self._ask_which_shift_again(conversation_id, employee_id)
+                return
+        elif shifts:
+            target = shifts[0]
+        else:
             await self._send_out_of_scope(conversation_id, employee_id)
             return
 
-        target = shifts[0]
+        await self._open_absence_case(conversation_id, employee_id, employee, target, now)
+
+    async def _open_absence_case(
+        self,
+        conversation_id: str,
+        employee_id: str,
+        employee: dict[str, Any],
+        target: Any,
+        now: datetime,
+    ) -> None:
+        """The one path that opens a rescue from an absence report: the
+        unambiguous single-shift case and the resolved shift-choice reply
+        share it (spec §2.1)."""
         deadline = self._deadline_for(now, target)
 
         case_id = f"case_{uuid4().hex}"
@@ -441,13 +568,21 @@ class RescueOrchestrator:
             session.add(
                 AuditEvent(
                     id=f"audit_{uuid4().hex}",
-                    rescue_id=f"case_{target.id}_{int(now.timestamp())}",
+                    # The real case id: a synthetic "case_<shift>_<ts>" id used to
+                    # be written here, which left every timeline query empty and
+                    # split the audit trail across two id namespaces.
+                    rescue_id=case_id,
                     type="ABSENCE_REPORTED",
                     payload={"shift_id": target.id},
                     actor=f"employee:{employee_id}",
                 )
             )
             await session.commit()
+
+        # The deadline task exists from OPEN: an absence that is never
+        # confirmed escalates when the deadline passes instead of hanging
+        # forever (spec §5.5; the transition is OPEN + DEADLINE_REACHED).
+        self._scheduler.schedule(_aware(deadline), "rescue_deadline", {"case_id": case_id})
 
         await self._send_template(
             to=self._phone_of(employee),
@@ -458,6 +593,46 @@ class RescueOrchestrator:
             role=self._role_label(target.role),
             start=self._fmt(target.starts_at),
             end=self._fmt(target.ends_at),
+        )
+
+    async def _ask_which_shift_again(self, conversation_id: str, employee_id: str) -> None:
+        """Send the which-shift question, at most once more, then redirect.
+
+        The persisted outbound `ask_which_shift` messages are the loop guard
+        (the mechanism `_clarify_once` uses for its own question): the first
+        send is the question, a second one is the single re-ask, and anything
+        after that gets the polite redirect (spec §5.5).
+        """
+        employee = await self._employee(employee_id)
+        if employee is None:
+            return
+        async with self._sessions() as session:
+            prior_asks = (
+                await session.execute(
+                    select(Message).where(
+                        Message.conversation_id == conversation_id,
+                        Message.direction == "outbound",
+                        Message.template_key == "ask_which_shift",
+                    )
+                )
+            ).scalars().all()
+        if len(prior_asks) >= 2:
+            await self._send_out_of_scope(conversation_id, employee_id)
+            return
+        shifts = await self._upcoming_shifts_of(employee_id, self._clock.now())
+        if len(shifts) < 2:
+            await self._send_out_of_scope(conversation_id, employee_id)
+            return
+        shift_list = ", ".join(
+            f"{self._role_label(s.role)} {self._fmt(s.starts_at)}-{self._fmt(s.ends_at)}"
+            for s in shifts
+        )
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key="ask_which_shift",
+            conversation_id=conversation_id,
+            employee_name=employee["full_name"],
+            shift_list=shift_list,
         )
 
     async def _handle_confirmation(self, conversation_id: str, employee_id: str) -> None:
@@ -637,10 +812,9 @@ class RescueOrchestrator:
             )
             session.add(
                 AuditEvent(
-                    id=(
-                        f"audit_{case.id}_queued_w{wave_number}_"
-                        f"{int(now.timestamp())}"
-                    ),
+                    # Same reasoning as the escalated id: the composed form
+                    # reached exactly the 64-char limit, leaving no margin.
+                    id=f"audit_{uuid4().hex}",
                     rescue_id=case.id,
                     type="OFFERS_QUEUED",
                     payload={
@@ -686,17 +860,18 @@ class RescueOrchestrator:
                     actor="system",
                 )
             )
+            offer_body = render(
+                "offer",
+                employee_name=employee["full_name"],
+                location_name=location_name,
+                role=self._role_label(shift.role),
+                start=self._fmt(shift.starts_at, location_tz),
+                end=self._fmt(shift.ends_at, location_tz),
+            )
             try:
                 provider_id = await self._channel.send(
                     recipient_phone_e164=self._phone_of(employee),
-                    body=render(
-                        "offer",
-                        employee_name=employee["full_name"],
-                        location_name=location_name,
-                        role=self._role_label(shift.role),
-                        start=self._fmt(shift.starts_at, location_tz),
-                        end=self._fmt(shift.ends_at, location_tz),
-                    ),
+                    body=offer_body,
                     template_key="offer",
                     rescue_id=case.id,
                 )
@@ -717,16 +892,19 @@ class RescueOrchestrator:
                 )
                 continue
 
+            offer_conversation = f"conv_twilio_{self._phone_of(employee)}"
             await self._get_or_create_conversation(
-                session, f"conv_{candidate.employee_id}", candidate.employee_id
+                session, offer_conversation, candidate.employee_id
             )
             session.add(
                 Message(
                     id=f"msg_{uuid4().hex}",
-                    conversation_id=f"conv_{candidate.employee_id}",
+                    conversation_id=offer_conversation,
                     direction="outbound",
                     provider_message_id=provider_id,
-                    body_redacted="[template: offer]",
+                    # The body the candidate actually received: a placeholder
+                    # here made the dashboard's conversation view useless.
+                    body_redacted=redact_if_health(offer_body),
                     template_key="offer",
                     delivery_status="sent",
                     rescue_id=case.id,
@@ -737,6 +915,24 @@ class RescueOrchestrator:
         return sent
 
     # --- offer acceptance and decisions ---------------------------------------
+
+    async def _case_awaiting_confirmation(self, employee_id: str) -> str | None:
+        """Shift id of the employee's OPEN case, or None.
+
+        An OPEN case means the absence was reported and we are waiting for the
+        employee to confirm it (spec §5.4), which is exactly the state the
+        interpreter needs as `pending_confirmation`.
+        """
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.status == State.OPEN.value,
+                    )
+                )
+            ).scalars().first()
+            return case.shift_id if case is not None else None
 
     async def _has_open_case(self, employee_id: str) -> bool:
         async with self._sessions() as session:
@@ -787,6 +983,26 @@ class RescueOrchestrator:
                     select(RescueCase).where(RescueCase.id == offer.rescue_id).with_for_update()
                 )
             ).scalar_one()
+
+            # An offer is only meaningful while its shift is still ahead: a
+            # candidate answering days later must never turn a shift that already
+            # ended into an approval (seen live: a "SÍ" accepted an offer whose
+            # shift was three days old and produced an approval request).
+            offer_shift = await self._workforce.get_shift(case.shift_id)
+            if offer_shift is None or _aware(offer_shift.ends_at) <= now:
+                offer.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{uuid4().hex}",
+                        rescue_id=case.id,
+                        type="OFFER_STALE",
+                        payload={"case_status": case.status},
+                        actor=f"employee:{employee_id}",
+                    )
+                )
+                await session.commit()
+                await self._reply_already_covered(employee_id)
+                return True
 
             if case.status == State.ESCALATED.value:
                 # Late acceptance after escalation: the manager decides (§5.5).
@@ -856,9 +1072,7 @@ class RescueOrchestrator:
                 await self._reply_already_covered(employee_id)
                 return True
 
-            shift = await self._workforce.get_shift(case.shift_id)
-            if shift is None:
-                return False
+            shift = offer_shift
 
             # Revalidate eligibility before assigning (spec §2.6, invariant 2).
             revalidation = await self._revalidate(case.location_id, shift, employee_id, now)
@@ -1343,6 +1557,56 @@ class RescueOrchestrator:
             await session.execute(select(Offer).where(Offer.id == offer_id))
         ).scalar_one_or_none()
 
+    async def close_rescue(self, rescue_id: str, decided_by: str) -> None:
+        """Manual manager close (spec §7.5), runs in the worker.
+
+        ESCALATED cases take the defined MANAGER_RESOLVED transition; active
+        offering/approval states cancel like an approved cancel_rescue. Cases
+        in OPEN (no candidates yet) or terminal states are left untouched —
+        the task is idempotent and never invents undefined transitions.
+        """
+        now = self._clock.now()
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == rescue_id).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if case is None:
+                return
+            state = State(case.status)
+            terminal = {
+                State.COVERED,
+                State.PARTIALLY_COVERED,
+                State.CLOSED_BY_MANAGER,
+                State.CANCELLED,
+            }
+            if state in terminal:
+                return  # already terminal
+            if state == State.OPEN:
+                return  # no defined close transition yet; the deadline owns it
+            if state == State.ESCALATED:
+                result = transition(state, StateMachineEvent.MANAGER_RESOLVED)
+                case.resolution = "resolved_by_manager"
+            else:  # OFFERING / AWAITING_APPROVAL: cancel like an approved cancel
+                result = transition(state, StateMachineEvent.APPROVAL_APPROVED_CANCEL)
+                case.resolution = "cancelled"
+                await self._supersede_offers(session, case.id)
+            case.status = result.new_state.value
+            case.closed_at = now
+            session.add(
+                AuditEvent(
+                    id=f"audit_{uuid4().hex}",
+                    rescue_id=case.id,
+                    # The dashboard timeline vocabulary has CANCELLED (the close
+                    # is a cancellation from the manager's point of view).
+                    type="CANCELLED",
+                    payload={"closed_by": "manager", "resolution": case.resolution},
+                    actor=f"manager:{decided_by}",
+                )
+            )
+            await session.commit()
+
     async def _supersede_offers(self, session: AsyncSession, rescue_id: str) -> None:
         pending = (
             await session.execute(
@@ -1434,7 +1698,13 @@ class RescueOrchestrator:
                     select(RescueCase).where(RescueCase.id == payload["case_id"])
                 )
             ).scalar_one_or_none()
-            if case is None or case.status != State.OFFERING.value:
+            if case is None or case.status not in (
+                State.OPEN.value,
+                State.OFFERING.value,
+            ):
+                # Terminal or already-progressed states: nothing to do. The
+                # OPEN branch is the unconfirmed-absence ghost (§5.5): the
+                # absence is never silently assumed, it escalates.
                 return
             await self._escalate(session, case, StateMachineEvent.DEADLINE_REACHED)
             await session.commit()
@@ -1510,14 +1780,17 @@ class RescueOrchestrator:
     async def _escalate(
         self, session: AsyncSession, case: RescueCase, event: StateMachineEvent
     ) -> None:
-        result = transition(State.OFFERING, event)
+        # The event is valid for the case's current state (OFFERING on the
+        # wave/deadline paths, OPEN for the unconfirmed-absence ghost, §5.5);
+        # an undefined pair raises instead of being ignored (spec §4.2).
+        result = transition(State(case.status), event)
         case.status = result.new_state.value
         session.add(
             AuditEvent(
-                id=(
-                    f"audit_{case.id}_escalated_"
-                    f"{int(self._clock.now().timestamp())}_{event.name}"
-                ),
+                # Composed ids ("audit_<case>_escalated_<ts>_<event>") overflowed
+                # VARCHAR(64) and rolled back the escalation; the reason lives in
+                # `payload` and the case in `rescue_id`, so the id is opaque.
+                id=f"audit_{uuid4().hex}",
                 rescue_id=case.id,
                 type="ESCALATED",
                 payload={"reason": event.name},
@@ -1571,6 +1844,131 @@ class RescueOrchestrator:
             location_id, now - timedelta(hours=24), now + timedelta(days=2)
         )
         return [s for s in schedule if s.employee_id == employee_id and s.ends_at > now]
+
+    async def _tz_of(self, employee_id: str) -> str | None:
+        """Location timezone of the employee, or None when they have none."""
+        location_id = await self._location_of(employee_id)
+        if location_id is None:
+            return None
+        _, tz_name = await self._location_info(location_id)
+        return tz_name
+
+    async def _today_marker(self, employee_id: str, now: datetime) -> str:
+        """Today's location-local date, the anchor for "el de hoy"/"el de mañana"."""
+        tz_name = await self._tz_of(employee_id)
+        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+        return _aware(now).astimezone(tz).date().isoformat()
+
+    async def _shift_choices(self, employee_id: str, now: datetime) -> list[str]:
+        """Candidate shifts for the interpreter, as
+        "<shift_id> <role> <YYYY-MM-DD> <HH:MM>-<HH:MM>" (location-local dates).
+
+        The day rides in the string so the model can map "el de hoy" /
+        "el de mañana" onto one candidate; without it those replies cannot
+        resolve and the question dead-ends. The deterministic degraded path
+        never parses this format — it matches against the shift objects
+        directly (`_resolve_shift_reference`).
+        """
+        tz_name = await self._tz_of(employee_id)
+        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+        return [
+            f"{s.id} {self._role_label(s.role)} "
+            f"{_aware(s.starts_at).astimezone(tz).date().isoformat()} "
+            f"{self._fmt(s.starts_at, tz_name)}-{self._fmt(s.ends_at, tz_name)}"
+            for s in await self._upcoming_shifts_of(employee_id, now)
+        ]
+
+    async def _asked_which_shift(self, conversation_id: str) -> bool:
+        """True when the last outbound question in the conversation was the
+        which-shift question (persisted `ask_which_shift` template)."""
+        async with self._sessions() as session:
+            asked = (
+                await session.execute(
+                    select(Message.id).where(
+                        Message.conversation_id == conversation_id,
+                        Message.direction == "outbound",
+                        Message.template_key == "ask_which_shift",
+                    )
+                )
+            ).first()
+        return asked is not None
+
+    def _resolve_shift_reference(
+        self,
+        shifts: list,
+        shift_reference: str | None,
+        text: str,
+        now: datetime,
+        tz_name: str | None,
+    ) -> Any | None:
+        """Pick the one shift a shift-choice reply names, or None.
+
+        The model's `shift_reference` wins when it matches a candidate.
+        Degraded mode resolves deterministically: "hoy"/"mañana", a start
+        time ("el de las 15") or a role ("el de barra"). Anything that does
+        not narrow the candidates to exactly one is None — never guess
+        between two shifts (spec §5.5).
+        """
+        if shift_reference:
+            named = [s for s in shifts if s.id == shift_reference]
+            if len(named) == 1:
+                return named[0]
+
+        lowered = text.strip().lower()
+        if not lowered:
+            return None
+        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+        today = _aware(now).astimezone(tz).date()
+        candidates = shifts
+
+        day = None
+        if re.search(r"\bhoy\b", lowered):
+            day = today
+        elif re.search(r"\bma[nñ]ana\b", lowered):
+            day = today + timedelta(days=1)
+        if day is not None:
+            on_day = [
+                s for s in candidates if _aware(s.starts_at).astimezone(tz).date() == day
+            ]
+            if not on_day:
+                return None
+            candidates = on_day
+
+        for role in ("kitchen", "floor", "bar", "cleaning", "supervisor"):
+            label = self._role_label(role)
+            if label in lowered or role in lowered:
+                in_role = [s for s in candidates if s.role == role]
+                if not in_role:
+                    return None
+                candidates = in_role
+                break
+
+        time_match = re.search(r"\blas?\s+(\d{1,2})(?::(\d{2}))?", lowered)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2)) if time_match.group(2) else None
+            at_time = [
+                s
+                for s in candidates
+                if (start := _aware(s.starts_at).astimezone(tz)).hour == hour
+                and (minute is None or start.minute == minute)
+            ]
+            if not at_time:
+                return None
+            candidates = at_time
+
+        return candidates[0] if len(candidates) == 1 else None
+
+    async def _conversation_for(self, employee_id: str) -> str | None:
+        """The employee's conversation id (the phone-based one the webhook uses)."""
+        employee = await self._employee(employee_id)
+        if employee is None or not employee.get("phone_e164"):
+            return None
+        conversation_id = f"conv_twilio_{employee['phone_e164']}"
+        async with self._sessions() as session:
+            await self._get_or_create_conversation(session, conversation_id, employee_id)
+            await session.commit()
+        return conversation_id
 
     async def _employee(self, employee_id: str) -> dict[str, Any] | None:
         location_id = await self._location_of(employee_id)
@@ -1678,6 +2076,14 @@ class RescueOrchestrator:
         if employee_id is not None and await self._outbound_limit_reached(employee_id):
             await self._register_outbound_limit(employee_id, template_key, rescue_id)
             return
+        # Every message the agent sends to an employee belongs to that
+        # employee's conversation: a reply that is not persisted leaves the
+        # dashboard showing the employee's message with no answer, which reads
+        # as a broken agent. Callers that already know the conversation pass it;
+        # the rest resolve it here (one thread per employee, the phone-based id
+        # the WhatsApp webhook uses).
+        if conversation_id is None and employee_id is not None:
+            conversation_id = await self._conversation_for(employee_id)
         body = render(template_key, **params)
         try:
             provider_id = await self._channel.send(
@@ -1717,16 +2123,194 @@ class RescueOrchestrator:
 
     async def _send_out_of_scope(self, conversation_id: str, employee_id: str) -> None:
         employee = await self._employee(employee_id)
+        if employee is None:
+            return
+        if await self._send_state_aware_redirect(conversation_id, employee_id, employee):
+            return
         location_name, _ = await self._location_info(
             await self._location_of(employee_id) or ""
         )
-        if employee is None:
-            return
         await self._send_template(
             to=self._phone_of(employee),
             template_key="out_of_scope",
+            conversation_id=conversation_id,
             location_name=location_name,
         )
+
+    async def _send_state_aware_redirect(
+        self,
+        conversation_id: str,
+        employee_id: str,
+        employee: dict[str, Any],
+    ) -> bool:
+        """Send the state-aware redirect for a live rescue; True when sent.
+
+        Priority follows what the employee can act on: an outstanding offer
+        to them first (they are a candidate and an answer is expected), then
+        their own live case — awaiting their confirmation (OPEN), being
+        covered (OFFERING) or waiting for the manager (AWAITING_APPROVAL).
+        Terminal cases (COVERED, ESCALATED, CANCELLED, ...) and employees
+        with nothing pending return False: the caller sends the generic
+        out_of_scope. Messages carry only the role and the shift window in
+        the location's timezone — never health details or internal ids (§10).
+        """
+        outstanding = await self._outstanding_offer_shift(employee_id)
+        if outstanding is not None:
+            shift, location_id = outstanding
+            _, location_tz = await self._location_info(location_id)
+            await self._send_template(
+                to=self._phone_of(employee),
+                template_key="offer_reminder",
+                conversation_id=conversation_id,
+                employee_id=employee_id,
+                employee_name=employee["full_name"],
+                role=self._role_label(shift.role),
+                start=self._fmt(shift.starts_at, location_tz),
+                end=self._fmt(shift.ends_at, location_tz),
+            )
+            return True
+        live = await self._live_absence_case(employee_id)
+        if live is None:
+            # Nothing pending, but a recent case may still be the reason the
+            # employee is writing (they answered a confirmation too late, for
+            # instance). Saying "I only handle absences" then is misleading.
+            return await self._send_recent_case_outcome(conversation_id, employee_id, employee)
+        status, shift_id, location_id = live
+        live_shift = await self._workforce.get_shift(shift_id)
+        if live_shift is None:
+            return False
+        _, location_tz = await self._location_info(location_id)
+        params: dict[str, Any] = dict(
+            employee_name=employee["full_name"],
+            role=self._role_label(live_shift.role),
+            start=self._fmt(live_shift.starts_at, location_tz),
+            end=self._fmt(live_shift.ends_at, location_tz),
+        )
+        template_key = {
+            State.OPEN.value: "absence_confirm",
+            State.OFFERING.value: "state_searching_coverage",
+            State.AWAITING_APPROVAL.value: "state_awaiting_approval",
+        }[status]
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key=template_key,
+            conversation_id=conversation_id,
+            employee_id=employee_id,
+            **params,
+        )
+        return True
+
+    async def _send_recent_case_outcome(
+        self,
+        conversation_id: str,
+        employee_id: str,
+        employee: dict[str, Any],
+    ) -> bool:
+        """Explain a recently closed case; True when a message was sent.
+
+        Covers the case a late answer lands in: the absence never got confirmed
+        in time and the rescue escalated, someone covered the shift, or the
+        manager closed it. Only cases from the recent window count — replying
+        about a shift from three days ago would be noise.
+        """
+        recent = await self._recent_terminal_case(employee_id)
+        if recent is None:
+            return False
+        status, shift_id, location_id = recent
+        shift = await self._workforce.get_shift(shift_id)
+        if shift is None:
+            return False
+        _, location_tz = await self._location_info(location_id)
+        template_key = {
+            State.ESCALATED.value: "state_case_escalated",
+            State.COVERED.value: "state_case_covered",
+        }.get(status, "state_case_closed")
+        params: dict[str, Any] = dict(
+            employee_name=employee["full_name"],
+            role=self._role_label(shift.role),
+            start=self._fmt(shift.starts_at, location_tz),
+            end=self._fmt(shift.ends_at, location_tz),
+        )
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key=template_key,
+            conversation_id=conversation_id,
+            employee_id=employee_id,
+            **params,
+        )
+        return True
+
+    async def _recent_terminal_case(self, employee_id: str) -> tuple[str, str, str] | None:
+        """(status, shift_id, location_id) of the employee's latest closed case.
+
+        Restricted to a recent window so an old case never becomes an answer.
+        """
+        cutoff = self._clock.now() - timedelta(hours=RECENT_CASE_WINDOW_HOURS)
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase)
+                    .where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.opened_at >= cutoff,
+                        RescueCase.status.notin_(
+                            [State.OPEN.value, State.OFFERING.value, State.AWAITING_APPROVAL.value]
+                        ),
+                    )
+                    .order_by(RescueCase.opened_at.desc())
+                )
+            ).scalars().first()
+        if case is None:
+            return None
+        return case.status, case.shift_id, case.location_id
+
+    async def _outstanding_offer_shift(self, employee_id: str) -> tuple[ShiftSlot, str] | None:
+        """(shift, location_id) of the employee's most recent PENDING offer."""
+        async with self._sessions() as session:
+            offer = (
+                await session.execute(
+                    select(Offer)
+                    .where(Offer.employee_id == employee_id, Offer.status == "PENDING")
+                    .order_by(Offer.sent_at.desc())
+                )
+            ).scalars().first()
+            if offer is None:
+                return None
+            case = (
+                await session.execute(
+                    select(RescueCase).where(RescueCase.id == offer.rescue_id)
+                )
+            ).scalars().first()
+        if case is None:
+            return None
+        shift = await self._workforce.get_shift(case.shift_id)
+        if shift is None:
+            return None
+        return shift, case.location_id
+
+    async def _live_absence_case(self, employee_id: str) -> tuple[str, str, str] | None:
+        """(status, shift_id, location_id) of the employee's live rescue case.
+
+        Only states where something is still pending count: a terminal case
+        (COVERED, ESCALATED, CANCELLED, ...) means nothing is pending and the
+        generic redirect is the honest answer.
+        """
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase)
+                    .where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.status.in_(
+                            [State.OPEN.value, State.OFFERING.value, State.AWAITING_APPROVAL.value]
+                        ),
+                    )
+                    .order_by(RescueCase.opened_at.desc())
+                )
+            ).scalars().first()
+            if case is None:
+                return None
+            return case.status, case.shift_id, case.location_id
 
     async def _quiet_hours(self, location_id: str) -> tuple[time, time]:
         async with self._sessions() as session:

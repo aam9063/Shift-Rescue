@@ -28,6 +28,13 @@ class TestLegalTransitions:
         assert new_state == State.ESCALATED
         assert SideEffect.NOTIFY_MANAGER in effects
 
+    def test_open_deadline_reached_escalates(self) -> None:
+        """§5.4/§5.5: an absence that is never confirmed escalates when the
+        deadline passes — it is never silently assumed."""
+        new_state, effects = t(State.OPEN, StateMachineEvent.DEADLINE_REACHED)
+        assert new_state == State.ESCALATED
+        assert SideEffect.NOTIFY_MANAGER in effects
+
     def test_offering_unconditional_accept_covers(self) -> None:
         new_state, effects = t(State.OFFERING, StateMachineEvent.UNCONDITIONAL_ACCEPT)
         assert new_state == State.COVERED

@@ -3,16 +3,23 @@
 Results of the evaluation harness (spec §8) as of the latest run, plus the
 failures found while building the project and how they were fixed.
 
+> **Live view:** every number below comes from the same source the dashboard
+> now serves. The Evals screen (and `GET /api/evals/runs*`, operator role)
+> reads the recorded `eval_run` rows, so the dashboard is the live view of
+> this data: run `evals/runner.py` (see the runbook, "Record an eval run")
+> and the latest accuracy, threshold verdict, per-scenario results and model
+> comparison appear there without editing this file.
+
 ## 1. Automated suites
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit | `cd backend && uv run pytest` | **211 passed** |
+| Backend unit | `cd backend && uv run pytest` | **435 passed, 2 skipped** |
 | Backend integration (real PostgreSQL) | `DATABASE_URL=... uv run pytest tests/integration -m integration` | **2 passed** |
 | Domain coverage gate (≥95%) | `uv run pytest --cov` | **100%** on `app/domain/` |
-| Frontend | `cd frontend && pnpm vitest run` | **81 passed** |
+| Frontend | `cd frontend && pnpm vitest run` | **119 passed** (17 files) |
 | Lint / types | `ruff check`, `mypy app` (strict), `oxlint` | clean |
-| Scenarios (§8.2) | `make eval` | **14/14 green, 0 invariant violations** |
+| Scenarios (§8.2) | `uv run pytest -q tests/unit/evals` | **15 scenarios green, 0 invariant violations** (27 tests) |
 
 ## 2. Scenario suite (`evals/scenarios/*.yaml`)
 
@@ -33,23 +40,114 @@ code** — never an LLM judge (§8.3). Minimum set per spec §8.2:
 | `shift_already_started` | remainder of a running shift can be covered |
 | `quiet_hours_deferred` | offers deferred to quiet-hours end |
 | `hris_failure_escalates` | retries ×3 → technical escalation |
+| `ghost_unconfirmed_escalates` | absence reported, never confirmed → deadline escalates to the manager (`OPEN` → `ESCALATED` with `manager_escalated`; the absence is never silently assumed, spec §5.4/§5.5) |
 | `llm_down_degraded` | provider down → deterministic parser keeps working |
 | `manipulation_and_health` | manipulation ignored, health details redacted |
 
 ## 3. Interpreter golden set (§8.1)
 
-`evals/golden/interpreter_golden.jsonl`: **150 labelled messages** covering
+`evals/golden/interpreter_golden.jsonl`: **155 labelled messages** covering
 accepts, declines, 20 conditionals with time extraction ("las 7 y cuarto" →
 07:15), reports (with and without health details), retractions, withdrawals,
-ambiguous input, questions, smalltalk, manipulation attempts and English.
+ambiguous input, questions, smalltalk, manipulation attempts and English —
+plus the shift-choice block (`golden_151..155`): replies to "¿de cuál te das de
+baja?" resolving one candidate by time, role, position or **day**.
 
-| Provider | Intent accuracy | Notes |
-|---|---|---|
-| Deterministic parser (degraded mode, offline) | **0.3733** | informational floor; it only knows an explicit vocabulary |
-| Real model (`--provider interpreter`) | **pending** | needs `ANTHROPIC_API_KEY`; thresholds in `evals/thresholds.yaml` (intent ≥0.92, health ≥0.95, times ≥0.80) |
+| Provider / prompt | Intent accuracy | Health detection | Conditional times | Avg latency | Avg cost | Verdict |
+|---|---|---|---|---|---|---|
+| Deterministic parser (degraded mode, offline) | 0.3733 | 0.0 | 0.0 | — | — | informational floor; it only knows an explicit vocabulary |
+| Deterministic parser + context (offline) | 0.3733 | 0.0 | 0.0 | — | — | same run, kept for reference |
+| `gpt-4o-mini`, `interpreter_v1` | 0.86 | 0.9167 | 0.95 | 1051 ms | $0.000211 | **2 violations** (intent < 0.92, health < 0.95) |
+| `gpt-4o-mini`, `interpreter_v2` | 0.9333 | 1.0 | 0.85 | 1047 ms | $0.000298 | thresholds met |
+| `gpt-4o-mini`, `interpreter_v3` (accepted-offer marker) | 0.9867 | 1.0 | **0.75** | 1125 ms | $0.000341 | **1 violation** (times < 0.80): fixed the withdrawals, regressed the times |
+| `gpt-4o-mini`, `interpreter_v4` | 0.9933 | 1.0 | 1.0 | — | — | thresholds met with 1 failure left |
+| `gpt-4o-mini`, `interpreter_v5` (shift-choice branch, 155 samples) | **0.9935** | **1.0** | **0.95** | — | — | **thresholds met, 1 failure left** |
+| `gpt-4o-mini`, `interpreter_v3` | pending parent measurement | — | — | — | — | **pending parent measurement** (fixture corrected, see below) |
+
+The v2 prompt added an explicit decision procedure keyed on the context the
+harness already supplies (`[pending_offers]` before `[pending_confirmation]`
+before "nothing pending"), numeric replies (`1` = yes, `2` = no) only when
+something is pending, a broader health rule (any symptom, malaise or medical
+reference), and worked examples for the confusions the v1 run exposed
+(`OFFER_ACCEPT` vs `ABSENCE_CONFIRM`, `OFFER_WITHDRAW` vs `OFFER_DECLINE`,
+`"xq no puedo ir hoy"` as a statement rather than a question).
+
+Run-to-run spread at temperature 0 is real but small (v1 measured 0.86 and 0.84
+in two consecutive runs); every prompt change above is larger than that spread.
+
+**v3** added the accepted-offer marker: the orchestrator now sends
+`accepted_offers`, so a cancellation with an accepted offer is a withdrawal
+instead of a guess. It fixed all six withdrawal cases and broke the times
+(0.75), which is why the thresholds caught it.
+
+**v4** corrected the prompt's own example. Every prompt from v1 onwards claimed
+`"hasta mediodía puedo"` should fill `proposed_start 07:00` **and**
+`proposed_end 12:00`, while the golden set expects `start=null, end=12:00` — the
+example contradicted the labels it was supposed to teach, and the model followed
+the example. v4 states the rule the data encodes: a single boundary fills
+exactly one field ("hasta las 11" → `proposed_end` only, "llego a las 7:15" →
+`proposed_start` only, "de 7 a 12" → both), and never copies the shift start on
+its own.
+
+The single remaining failure is `"cancele el caso de todos"` (expected
+`UNCLEAR`, a scope-violation message). It is tracked, not fitted.
+
+**Fixture correction in v3 (not a label change).** The `OFFER_WITHDRAW` rows
+shared the exact context of the `OFFER_DECLINE` rows —
+`{"pending_offers": ["offer_1"], ...}` — so the only way to match them was to
+infer the employee's acceptance state from wording, which is prompt overfitting
+(§5.2). The fixture described an incomplete world state for those labels, so
+the state is now part of the input: every `OFFER_WITHDRAW` row carries
+`"accepted_offers": ["offer_1"]`, supplied by the orchestrator as a new context
+key (`[accepted_offers=...]`). Expected **labels** are byte-identical; no other
+row changed. `interpreter_v3` adds the marker rule on top of v2's decision
+procedure: a cancellation with an accepted offer is OFFER_WITHDRAW, a negative
+answer with only a pending offer is OFFER_DECLINE.
 
 The parser baseline is deliberately low: it exists so the product still works
 when the LLM is unavailable, not to replace it.
+
+### 3.1 Shift-choice candidates are dated, and the context has a day anchor
+
+The first shift-choice fixtures sent candidates as
+`"<shift_id> <role> <HH:MM>-<HH:MM>"`, so a day reference ("el de hoy") could
+not resolve: the model had no way to map the phrase onto a candidate, and the
+deterministic path only knows the day from the clock. T1's format now sends
+each candidate with its start date,
+`"<shift_id> <role> <YYYY-MM-DD> <HH:MM>-<HH:MM>"` (location-local; the end
+time stays HH:MM, so a night shift crossing midnight reads `19:00-03:00`), and
+the orchestrator adds a `[today=YYYY-MM-DD]` anchor — without it, dated
+candidates alone still cannot say which date "hoy" is.
+
+`interpreter_v5` documents the dated format and maps its examples onto it
+("el de hoy" / "el de mañana" resolve against `[today]` and each candidate's
+date; ambiguity stays UNCLEAR; a bare "sí" in the shift-choice state identifies
+nothing). v5 was created and corrected inside the same uncommitted change and
+has never shipped, so it was edited in place: ADR-002's versioning rule exists
+to keep shipped prompts attributable, and inflating versions for an unreleased
+prompt would not improve attribution.
+
+Golden rows touched (only rows added by this change; every pre-existing row is
+byte-identical):
+
+- `golden_151..153`: context updated to the dated candidate format plus the
+  `today` anchor; expected labels unchanged ("el de las 15"/"el de barra"/
+  "el primero" still resolve as ABSENCE_REPORT).
+- `golden_154` ("el de hoy"): was UNCLEAR because the undated list made the
+  reply unresolvable; with one candidate dated today and one tomorrow it now
+  expects `ABSENCE_REPORT` with `shift_reference: "shift_a"`.
+- `golden_155` ("sí"): kept **byte-identical** by decision — a bare "sí" in the
+  shift-choice state answers nothing the agent asked and must stay UNCLEAR.
+  Note its context deliberately keeps the old undated format: the assertion is
+  format-independent and the decision pinned the row as is.
+
+**The context-contract guard.** `test_llm_context_contract_exact_key_set` pins,
+per state, the exact key set the orchestrator sends and the exact candidate
+strings — including `shifts_48h`, `pending_shift_choice` and the new `today`
+anchor. This is the test that would have caught all three fixture/production
+mismatches this feature fixed (withdrawal marker, pending confirmation, shift
+list): the golden fixtures describe the context production must send, and this
+test fails the moment either side drifts.
 
 ## 4. Failures found during development (and their fixes)
 
@@ -70,12 +168,53 @@ end to end rather than by unit tests alone.
 | 10 | Employee absence not found on the demo day | seed built a fixed two-week window starting in the future; the lookup window was 4 h | the seed starts on the current day; the lookup window is 24 h and matches shifts that have not ended |
 | 11 | Cannot send WhatsApp from the sandbox | Twilio **trial** accounts cannot send via API (`21654`, Content API `401`); after upgrading, the account's **Primary Compliance Profile** must be approved (`20003`) | provider-side; documented in `docs/twilio-sandbox-setup.md` (worked around by upgrading + submitting the Trust Hub profile) |
 
+| 12 | The accuracy gate printed **"Thresholds met."** while two thresholds were violated | threshold keys ended in `_min`/`_max` and the report stored the metrics without the suffix, so every lookup returned `None` and every comparison was skipped; the YAML was never read | thresholds moved to `app/evals/thresholds.py`, read the YAML and fail closed (unmapped key, unknown metric or non-numeric value is a violation) — see §5.1 |
+| 13 | Prompt examples contradicted the golden labels and cost 5 of 20 time extractions | the example for `"hasta mediodía puedo"` filled `proposed_start` while the labels expect `null`; the model followed the example | v4 states the one-boundary-one-field rule (see §3) |
+| 14 | A backend test passed locally and failed in CI | `build_runtime(settings)` ignored its own settings for the database and fell back to the ambient `.env`, so the test connected to the developer's local Postgres | the runtime passes `settings.database_url` explicitly and the test uses a temp-file database |
+
 ## 5. Known gaps
 
-- The real-model interpreter run (accuracy thresholds) needs an API key; the
-  harness and thresholds are ready.
-- Celery beat should own the scheduled work in production (the lifespan ticker
-  covers the demo and restarts lose in-flight timers).
+### 5.1 The threshold gate silently passed for months
+
+`check_thresholds()` iterated hardcoded keys ending in `_min`/`_max`
+(`intent_accuracy_min`) while the report stored the values without the suffix
+(`intent_accuracy`), so `report.get(key)` returned `None` for every entry, every
+comparison was skipped and the runner printed **"Thresholds met."** while two
+thresholds were violated. `evals/thresholds.yaml` was never read at all.
+
+Fixed: thresholds now live in `backend/app/evals/thresholds.py`, read the YAML
+(single source of truth, max *and* min directions), and **fail closed** — an
+unmapped key, an unknown metric or a non-numeric value is a violation rather
+than a silent pass. Verified against the real v1 report, which now reports
+exactly the two violations it always had.
+
+### 5.2 `OFFER_WITHDRAW` is not inferable from the context the harness supplies
+
+Six of the ten remaining failures (`no puedo al final`, `imposible al final`,
+`tengo que cancelar`, `no podré ir`, `i need to cancel`) carry **the same
+context** as cases labelled `OFFER_DECLINE` and `OFFER_ACCEPT`:
+`{"pending_offers": ["offer_1"], ...}`. The golden set distinguishes them by
+wording alone, so the only way to match it is a lexical rule for the word
+"al final" — which would be prompt overfitting, not a real capability.
+
+The product fix is to put the missing fact in the context: when an employee has
+already accepted and now cancels, the orchestrator knows it, and the interpreter
+should receive that marker (e.g. `[accepted_offer=offer_1]`) so the distinction
+is state, not guesswork. Tracked as its own work unit; the remaining four
+failures are one accentless `"si"`, one colloquial `"allí estaré"`, one
+`QUESTION`/`SMALLTALK` boundary and one adversarial case (`"cancele el caso de
+todos"` → expected `UNCLEAR`).
+
+**Fixed** by `interpreter_v3` and the `accepted_offers` context key (see the
+fixture-correction note in §3): the marker is state supplied by the
+orchestrator, and the golden rows now carry it.
+
+### 5.3 Scheduled work
+
+Celery beat owns the scheduled work (every 5 s `run-due-jobs`, daily retention
+purge). The in-memory `SimScheduler` still loses in-flight timers if the worker
+restarts, so wave deadlines survive a restart only once the schedule lives in
+the database.
 - The two-phone acceptance run needs a second WhatsApp number joined to the
   sandbox; everything else is verified live.
 - `make eval-models` (Anthropic vs Bedrock vs NaN comparison) is prepared but

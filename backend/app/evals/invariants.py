@@ -87,6 +87,14 @@ def check_invariants(snapshot: dict[str, Any]) -> list[str]:
         required.discard("ESCALATED")
     if not offers:
         required.discard("OFFER_SENT")
+        if status == "ESCALATED":
+            # A case escalated straight from OPEN (the unconfirmed-absence ghost,
+            # §5.4/§5.5) never opened a rescue, so RESCUE_OPENED was never
+            # emitted — requiring it here would be unsatisfiable. The trail is
+            # still pinned complete: the absence report AND the escalation
+            # itself must both be present.
+            required.discard("RESCUE_OPENED")
+            required |= {"ABSENCE_REPORTED", "ESCALATED"}
     missing = required - audit_types
     if missing:
         violations.append(f"INV6: missing audit events for {status}: {sorted(missing)}")

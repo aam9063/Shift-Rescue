@@ -103,3 +103,107 @@ async def test_timeout_is_enforced(monkeypatch) -> None:
 
     with pytest.raises(TimeoutError):
         await client.interpret("sí voy", {})
+
+
+class FakeMetrics:
+    """Shape reported by Strands 1.56: EventLoopMetrics with camelCase usage."""
+
+    def __init__(self, usage: dict, latency_ms: float = 0.0) -> None:
+        self.accumulated_usage = usage
+        self.accumulated_metrics = {"latencyMs": latency_ms}
+
+
+class FakeAgentWithMetrics(FakeAgent):
+    def __init__(self, *args, usage: dict | None = None, latency_ms: float = 0.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.metrics = FakeMetrics(
+            usage
+            if usage is not None
+            else {"inputTokens": 1126, "outputTokens": 56, "cacheReadInputTokens": 1024},
+            latency_ms,
+        )
+
+
+async def test_meters_the_real_strands_metrics_shape() -> None:
+    agent = FakeAgentWithMetrics(structured_output=structured())
+    client = StrandsLLMClient(
+        agent_factory=lambda: agent,
+        model_id="gpt-4o-mini",
+        price_per_1k={"input": 0.00015, "output": 0.0006},
+    )
+
+    await client.interpret("sí voy", {})
+
+    usage = client.last_usage or {}
+    assert usage["input_tokens"] == 1126
+    assert usage["output_tokens"] == 56
+    assert usage["cached_input_tokens"] == 1024
+    # 1126/1000*0.00015 + 56/1000*0.0006 = 0.0001689 + 0.0000336
+    assert usage["cost_usd"] == pytest.approx(0.0002025, rel=1e-3)
+    assert usage["model"] == "gpt-4o-mini"
+
+
+async def test_latency_falls_back_to_wall_clock_when_the_sdk_reports_zero() -> None:
+    # A tiny delay makes the wall-clock fallback observable (an instant call
+    # legitimately measures ~0 ms).
+    agent = FakeAgentWithMetrics(structured_output=structured(), latency_ms=0.0, delay=0.01)
+    client = StrandsLLMClient(agent_factory=lambda: agent)
+
+    await client.interpret("sí voy", {})
+
+    assert (client.last_usage or {})["latency_ms"] > 0
+
+
+async def test_prompt_forwards_pending_confirmation_and_extra_context_keys() -> None:
+    agent = FakeAgent(structured_output=structured())
+    client = StrandsLLMClient(agent_factory=lambda: agent)
+
+    await client.interpret(
+        "1",
+        {
+            "rescue_id": "case_1",
+            "pending_confirmation": "shift_1",
+            "shifts_48h": ["shift_1 07:00-15:00"],
+            "channel_id": "wa_42",
+            "empty_note": "",
+            "empty_list": [],
+            "api_key": "sk-should-never-leak",
+        },
+    )
+
+    prompt = agent.prompts[0]
+    assert "[rescue_id=case_1]" in prompt
+    assert "[pending_confirmation=shift_1]" in prompt
+    assert "[shifts_48h=['shift_1 07:00-15:00']]" in prompt
+    assert "[channel_id=wa_42]" in prompt
+    assert "empty_note" not in prompt
+    assert "empty_list" not in prompt
+    assert "sk-should-never-leak" not in prompt
+
+
+async def test_prompt_keeps_validation_error_retry_line() -> None:
+    agent = FakeAgent(structured_output=structured())
+    client = StrandsLLMClient(agent_factory=lambda: agent)
+
+    await client.interpret("hola", {"validation_error": "bad format", "rescue_id": "c1"})
+
+    prompt = agent.prompts[0]
+    assert "[rescue_id=c1]" in prompt
+    assert "Tu respuesta anterior no fue válida: bad format" in prompt
+
+
+async def test_meters_legacy_snake_case_usage_shape() -> None:
+    class LegacyMetrics:
+        usage = {"input_tokens": 100, "output_tokens": 10}
+        accumulated_metrics = {"latencyMs": 0}
+
+    agent = FakeAgent(structured_output=structured())
+    agent.metrics = LegacyMetrics()
+    client = StrandsLLMClient(agent_factory=lambda: agent)
+
+    await client.interpret("sí voy", {})
+
+    usage = client.last_usage or {}
+    assert usage["input_tokens"] == 100
+    assert usage["output_tokens"] == 10
+    assert usage["cached_input_tokens"] == 0

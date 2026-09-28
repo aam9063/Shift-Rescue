@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.db.models import Offer, RescueCase
+from app.db.models import Message, Offer, RescueCase
 from tests.unit.services.helpers import MANAGER_PHONE, build_world, run_to_offering
 
 
@@ -142,3 +142,30 @@ async def test_late_acceptance_after_escalation_goes_to_approval() -> None:
         approval = (await session.execute(select(ApprovalRequest))).scalar_one()
         assert approval.status == "pending"
     assert world.channel.to(MANAGER_PHONE)
+
+
+async def test_offer_messages_persist_the_body_that_was_sent() -> None:
+    """The conversation view is worthless with a placeholder.
+
+    The offer rows were stored as "[template: offer]" instead of the rendered
+    text, so the dashboard showed a placeholder where the employee's real
+    message should be.
+    """
+    world, _ = await build_world(floor_count=5, shift_starts_in=timedelta(hours=3))
+    await run_to_offering(world)
+
+    async with world.session_factory() as session:
+        outbound = (
+            await session.execute(
+                select(Message).where(
+                    Message.direction == "outbound",
+                    Message.template_key == "offer",
+                )
+            )
+        ).scalars().all()
+
+    assert outbound, "the wave must have sent offers"
+    for message in outbound:
+        assert "[template:" not in message.body_redacted
+        assert "Ha quedado libre un turno de" in message.body_redacted
+        assert "Responde S" in message.body_redacted  # the window and the ask are there

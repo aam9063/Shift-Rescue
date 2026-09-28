@@ -56,3 +56,27 @@ deployment.
   a local alternative only.
 - **Spec amendment:** spec §9.1 said "Langfuse self-hosted"; amended by this
   instruction (spec §0 rule 5: scope changes update intent and tasks).
+- **Wired (2026-09-25, `llm-runtime-wiring`):** the instruction is now code,
+  not intent. `configure_tracing()` installs the OTLP/HTTP exporter that sends
+  Strands' spans straight to Langfuse Cloud using only these three variables;
+  without the two keys tracing is a no-op (verified: no exporter, no provider,
+  no error). Endpoint derivation and Basic auth live in `Settings`
+  (`traces_endpoint`, `traces_auth_header`), and `OTEL_EXPORTER_OTLP_ENDPOINT`
+  still overrides the derived URL for a future non-Langfuse backend.
+
+## A5 — OpenAI as the first LLM provider (2026-09-25, `llm-runtime-wiring`)
+
+- **Instruction (user):** use **OpenAI** as the live provider instead of the
+  OpenAI-compatible gateway previously configured (NaN), to avoid latency and
+  vague answers; the user holds OpenAI credits.
+- **Consequence:** `LLM_PROVIDER=openai` (default) with `OPENAI_API_KEY`;
+  `gpt-4o-mini` is the default interpretation model. The old
+  `LLM_PROVIDER_INTERPRETER`, `NAN_API_KEY`, `NAN_BASE_URL` and
+  `LLM_MODEL_INTERPRETER_NAN` variables are **removed** from `.env.example`:
+  they were never read by any code. A compatible gateway remains reachable as
+  `LLM_PROVIDER=openai` + `OPENAI_BASE_URL`, so this is a configuration change
+  and not a new dependency on a code path.
+- **Consequence:** `anthropic` and `bedrock` stay implemented but optional; the
+  `anthropic` SDK is deliberately *not* a hard dependency.
+- **Where documented:** ADR-004 (provider selection and fail-closed policy),
+  `docs/runbook.md` §2 (key setup and verification), spec §6.1.
