@@ -47,8 +47,14 @@ with). All data is demo data at "La Terraza del Puerto".
    *"the agent is replying…"* and blocks duplicate sends; when the answer
    lands it appears in the thread by itself — no reload — and the Today board
    refreshes.
-3. The agent asks for an explicit confirmation: reply `SÍ` in the same frame.
-   (It never opens a rescue by guessing, and it never asks why.)
+3. The agent asks for an explicit confirmation: reply `SÍ` in the same frame,
+   **and do it promptly**. ⏱️ The confirmation has a deadline: for a shift that
+   has *already started* you have **10 minutes** (spec §5.3: `start − 30 min`, or
+   `opened + 10 min` when that has already passed). If the answer arrives later
+   the rescue has already escalated to the manager — the agent will then explain
+   that instead of confirming, which is correct but makes a confusing demo. For a
+   calmer walkthrough pick an employee whose shift *starts later* (the frame says
+   *Starts at HH:MM*): the window runs until half an hour before that shift.
 4. On confirmation the rescue opens: the shift is marked absent in the HR
    system, the manager gets a notice, and the first wave of offers goes out.
 
@@ -99,6 +105,11 @@ Optional, and the best proof that nothing is lost: before closing, go back to th
 Simulator and have a candidate whose offer is still open answer `SÍ`. The case
 returns to the manager as an **approval request** (spec §5), so a shift can still
 be covered after the deadline — the agent stops waiting, the manager decides.
+
+Answering late is not a dead end: if the employee writes after the case closed,
+the agent tells them the outcome (it escalated, it was covered, or the manager
+closed it) and — since every reply is stored in the thread — it shows up in
+**Conversations** as well as on their phone.
 
 If instead a case is **awaiting approval** (a conditional acceptance), the
 manager acts right on the detail screen: **Approve** or **Reject** inline, and

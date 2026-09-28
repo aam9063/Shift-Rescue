@@ -9,9 +9,10 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.agent.interpreter import MessageInterpreter
-from app.db.models import AuditEvent, Message, Offer, RescueCase, Shift
+from app.db.models import ApprovalRequest, AuditEvent, Message, Offer, RescueCase, Shift
 from app.db.seed import DEMO_LOCATION_ID
-from tests.unit.services.helpers import run_to_offering
+from app.services.orchestrator import RECENT_CASE_WINDOW_HOURS
+from tests.unit.services.helpers import build_world, run_to_offering
 
 CONVERSATION = "conv_1"
 PROVIDER_ID = "provider_msg_1"
@@ -621,15 +622,24 @@ async def test_covered_case_keeps_the_generic_redirect(world, db) -> None:
         text="hola",
     )
 
+    # The candidate has nothing pending: generic redirect, as before.
     redirects = world.channel.with_template("out_of_scope")
-    assert len(redirects) == 2
+    assert len(redirects) == 1
     assert not world.channel.with_template("offer_reminder")
     assert not world.channel.with_template("state_searching_coverage")
+    # The absent employee's case is closed and covered: they are told that,
+    # not the generic "I only handle absences".
+    assert world.channel.with_template("state_case_covered")
 
 
-async def test_escalated_case_keeps_the_generic_redirect(world) -> None:
-    """An ESCALATED case is terminal: the manager owns it now, so an unclear
-    message still gets the generic redirect, not a stale state message."""
+async def test_late_answer_to_an_escalated_case_explains_what_happened(world) -> None:
+    """A late "sí" must not get "I only handle absences".
+
+    Real case: the employee reported an absence, the ten-minute confirmation
+    window closed, the rescue escalated to the manager, and their answer arrived
+    29 minutes later. The generic line is the opposite of the truth then — their
+    absence IS registered and was escalated — so the agent says so.
+    """
     await world.orchestrator.handle_inbound(
         conversation_id=CONVERSATION,
         employee_id="emp_01_floor",
@@ -643,9 +653,94 @@ async def test_escalated_case_keeps_the_generic_redirect(world) -> None:
         conversation_id=CONVERSATION,
         employee_id="emp_01_floor",
         provider_message_id="provider_msg_2",
+        text="SÍ",
+    )
+
+    assert not world.channel.with_template("out_of_scope")
+    outcome = world.channel.with_template("state_case_escalated")
+    assert outcome, "the employee must be told the case was escalated"
+    assert "ya está registrada" in outcome[0]["body"]
+
+
+async def test_covered_and_manager_closed_cases_read_their_own_outcome(world) -> None:
+    """Terminal cases get the outcome that matches them, not one generic line."""
+    offers = await run_to_offering(world)
+    target = offers[0]
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{target.employee_id}",
+        employee_id=target.employee_id,
+        provider_message_id="accept_1",
+        text="sí",
+    )
+
+    async with world.session_factory() as session:
+        case = (await session.execute(select(RescueCase))).scalar_one()
+        case.status = "CLOSED_BY_MANAGER"
+        await session.commit()
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="late_1",
+        text="hola",
+    )
+
+    assert world.channel.with_template("state_case_closed")
+    assert not world.channel.with_template("out_of_scope")
+
+
+async def test_an_old_case_is_not_an_answer(world) -> None:
+    """The recent window keeps a three-day-old case out of the reply."""
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id=PROVIDER_ID,
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+    world.clock.advance(timedelta(minutes=11))
+    await world.scheduler.run_due(world.clock.now())
+    world.clock.advance(timedelta(hours=RECENT_CASE_WINDOW_HOURS + 1))
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="provider_msg_2",
         text="hola",
     )
 
     assert world.channel.with_template("out_of_scope")
-    assert not world.channel.with_template("state_searching_coverage")
-    assert not world.channel.with_template("state_awaiting_approval")
+    assert not world.channel.with_template("state_case_escalated")
+
+
+async def test_an_offer_for_a_shift_that_already_ended_is_not_acceptable() -> None:
+    """A candidate answering days later must not resurrect a finished shift.
+
+    Seen live: a "SÍ" matched an offer whose shift was three days old and the
+    system created a late-acceptance approval for it.
+    """
+    world, _ = await build_world(floor_count=3, shift_starts_in=timedelta(minutes=20))
+    offers = await run_to_offering(world)
+    target = offers[0]
+
+    # The rescue escalates, and then the shift comes and goes.
+    world.clock.advance(timedelta(hours=12))
+    await world.scheduler.run_due(world.clock.now())
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=f"conv_{target.employee_id}",
+        employee_id=target.employee_id,
+        provider_message_id="late_after_days",
+        text="sí",
+    )
+
+    async with world.session_factory() as session:
+        approvals = (await session.execute(select(ApprovalRequest))).scalars().all()
+        stale = (
+            await session.execute(select(AuditEvent).where(AuditEvent.type == "OFFER_STALE"))
+        ).scalars().all()
+        stored = (await session.execute(select(Offer).where(Offer.id == target.id))).scalar_one()
+
+    assert approvals == [], "a finished shift must never become an approval"
+    assert stale, "the stale offer must be audited"
+    assert stored.status == "CANCELLED"
+    assert world.channel.with_template("offer_already_covered")

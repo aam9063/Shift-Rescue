@@ -62,6 +62,10 @@ class OrchestratorConfig:
     max_outbound_per_hour: int = 3
 
 
+# How far back a closed case is still worth explaining to the employee.
+RECENT_CASE_WINDOW_HOURS = 6
+
+
 class RescueOrchestrator:
     def __init__(
         self,
@@ -888,13 +892,14 @@ class RescueOrchestrator:
                 )
                 continue
 
+            offer_conversation = f"conv_twilio_{self._phone_of(employee)}"
             await self._get_or_create_conversation(
-                session, f"conv_{candidate.employee_id}", candidate.employee_id
+                session, offer_conversation, candidate.employee_id
             )
             session.add(
                 Message(
                     id=f"msg_{uuid4().hex}",
-                    conversation_id=f"conv_{candidate.employee_id}",
+                    conversation_id=offer_conversation,
                     direction="outbound",
                     provider_message_id=provider_id,
                     # The body the candidate actually received: a placeholder
@@ -979,6 +984,26 @@ class RescueOrchestrator:
                 )
             ).scalar_one()
 
+            # An offer is only meaningful while its shift is still ahead: a
+            # candidate answering days later must never turn a shift that already
+            # ended into an approval (seen live: a "SÍ" accepted an offer whose
+            # shift was three days old and produced an approval request).
+            offer_shift = await self._workforce.get_shift(case.shift_id)
+            if offer_shift is None or _aware(offer_shift.ends_at) <= now:
+                offer.status = "CANCELLED"
+                session.add(
+                    AuditEvent(
+                        id=f"audit_{uuid4().hex}",
+                        rescue_id=case.id,
+                        type="OFFER_STALE",
+                        payload={"case_status": case.status},
+                        actor=f"employee:{employee_id}",
+                    )
+                )
+                await session.commit()
+                await self._reply_already_covered(employee_id)
+                return True
+
             if case.status == State.ESCALATED.value:
                 # Late acceptance after escalation: the manager decides (§5.5).
                 result = transition(State.ESCALATED, StateMachineEvent.LATE_ACCEPTANCE)
@@ -1047,9 +1072,7 @@ class RescueOrchestrator:
                 await self._reply_already_covered(employee_id)
                 return True
 
-            shift = await self._workforce.get_shift(case.shift_id)
-            if shift is None:
-                return False
+            shift = offer_shift
 
             # Revalidate eligibility before assigning (spec §2.6, invariant 2).
             revalidation = await self._revalidate(case.location_id, shift, employee_id, now)
@@ -1936,6 +1959,17 @@ class RescueOrchestrator:
 
         return candidates[0] if len(candidates) == 1 else None
 
+    async def _conversation_for(self, employee_id: str) -> str | None:
+        """The employee's conversation id (the phone-based one the webhook uses)."""
+        employee = await self._employee(employee_id)
+        if employee is None or not employee.get("phone_e164"):
+            return None
+        conversation_id = f"conv_twilio_{employee['phone_e164']}"
+        async with self._sessions() as session:
+            await self._get_or_create_conversation(session, conversation_id, employee_id)
+            await session.commit()
+        return conversation_id
+
     async def _employee(self, employee_id: str) -> dict[str, Any] | None:
         location_id = await self._location_of(employee_id)
         if location_id is None:
@@ -2042,6 +2076,14 @@ class RescueOrchestrator:
         if employee_id is not None and await self._outbound_limit_reached(employee_id):
             await self._register_outbound_limit(employee_id, template_key, rescue_id)
             return
+        # Every message the agent sends to an employee belongs to that
+        # employee's conversation: a reply that is not persisted leaves the
+        # dashboard showing the employee's message with no answer, which reads
+        # as a broken agent. Callers that already know the conversation pass it;
+        # the rest resolve it here (one thread per employee, the phone-based id
+        # the WhatsApp webhook uses).
+        if conversation_id is None and employee_id is not None:
+            conversation_id = await self._conversation_for(employee_id)
         body = render(template_key, **params)
         try:
             provider_id = await self._channel.send(
@@ -2091,6 +2133,7 @@ class RescueOrchestrator:
         await self._send_template(
             to=self._phone_of(employee),
             template_key="out_of_scope",
+            conversation_id=conversation_id,
             location_name=location_name,
         )
 
@@ -2128,7 +2171,10 @@ class RescueOrchestrator:
             return True
         live = await self._live_absence_case(employee_id)
         if live is None:
-            return False
+            # Nothing pending, but a recent case may still be the reason the
+            # employee is writing (they answered a confirmation too late, for
+            # instance). Saying "I only handle absences" then is misleading.
+            return await self._send_recent_case_outcome(conversation_id, employee_id, employee)
         status, shift_id, location_id = live
         live_shift = await self._workforce.get_shift(shift_id)
         if live_shift is None:
@@ -2153,6 +2199,70 @@ class RescueOrchestrator:
             **params,
         )
         return True
+
+    async def _send_recent_case_outcome(
+        self,
+        conversation_id: str,
+        employee_id: str,
+        employee: dict[str, Any],
+    ) -> bool:
+        """Explain a recently closed case; True when a message was sent.
+
+        Covers the case a late answer lands in: the absence never got confirmed
+        in time and the rescue escalated, someone covered the shift, or the
+        manager closed it. Only cases from the recent window count — replying
+        about a shift from three days ago would be noise.
+        """
+        recent = await self._recent_terminal_case(employee_id)
+        if recent is None:
+            return False
+        status, shift_id, location_id = recent
+        shift = await self._workforce.get_shift(shift_id)
+        if shift is None:
+            return False
+        _, location_tz = await self._location_info(location_id)
+        template_key = {
+            State.ESCALATED.value: "state_case_escalated",
+            State.COVERED.value: "state_case_covered",
+        }.get(status, "state_case_closed")
+        params: dict[str, Any] = dict(
+            employee_name=employee["full_name"],
+            role=self._role_label(shift.role),
+            start=self._fmt(shift.starts_at, location_tz),
+            end=self._fmt(shift.ends_at, location_tz),
+        )
+        await self._send_template(
+            to=self._phone_of(employee),
+            template_key=template_key,
+            conversation_id=conversation_id,
+            employee_id=employee_id,
+            **params,
+        )
+        return True
+
+    async def _recent_terminal_case(self, employee_id: str) -> tuple[str, str, str] | None:
+        """(status, shift_id, location_id) of the employee's latest closed case.
+
+        Restricted to a recent window so an old case never becomes an answer.
+        """
+        cutoff = self._clock.now() - timedelta(hours=RECENT_CASE_WINDOW_HOURS)
+        async with self._sessions() as session:
+            case = (
+                await session.execute(
+                    select(RescueCase)
+                    .where(
+                        RescueCase.absent_employee_id == employee_id,
+                        RescueCase.opened_at >= cutoff,
+                        RescueCase.status.notin_(
+                            [State.OPEN.value, State.OFFERING.value, State.AWAITING_APPROVAL.value]
+                        ),
+                    )
+                    .order_by(RescueCase.opened_at.desc())
+                )
+            ).scalars().first()
+        if case is None:
+            return None
+        return case.status, case.shift_id, case.location_id
 
     async def _outstanding_offer_shift(self, employee_id: str) -> tuple[ShiftSlot, str] | None:
         """(shift, location_id) of the employee's most recent PENDING offer."""

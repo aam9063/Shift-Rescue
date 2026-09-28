@@ -53,6 +53,19 @@ _TEMPLATES: dict[str, str] = {
     "ask_clarification": (
         "No te he entendido bien. ¿Me lo repites? Responde SÍ o NO."
     ),
+    "state_case_escalated": (
+        "Vale {employee_name}, tu ausencia del turno de {role} de {start} a {end} ya "
+        "está registrada. No llegamos a confirmarla a tiempo, así que se la he pasado "
+        "a tu encargado para que se ocupe de cubrirla. No tienes que hacer nada más."
+    ),
+    "state_case_covered": (
+        "Buenas noticias, {employee_name}: tu turno de {start} a {end} ya está cubierto. "
+        "No tienes que hacer nada más."
+    ),
+    "state_case_closed": (
+        "{employee_name}, tu aviso del turno de {start} a {end} quedó cerrado por tu "
+        "encargado. Para cualquier cosa, habla directamente con él."
+    ),
     "out_of_scope": (
         "Hola, soy el asistente de turnos de {location_name} y solo gestiono "
         "avisos de ausencia y coberturas. Para cualquier otra cosa, contacta "
