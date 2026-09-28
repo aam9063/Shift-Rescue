@@ -181,6 +181,11 @@ function EmployeePhone({
         </div>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-3" aria-label={`Thread of ${employee.displayName}`}>
+        {messages.length === 0 && (
+          <p className="pt-6 text-center text-xs tracking-tight text-text-secondary">
+            No messages yet — write the first one.
+          </p>
+        )}
         {messages.map((message, index) => (
           <div
             key={index}

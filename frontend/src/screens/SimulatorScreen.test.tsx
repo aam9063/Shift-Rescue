@@ -43,7 +43,7 @@ const EMPLOYEES: SimulatorEmployee[] = [
     shiftStartsAt: '2026-10-03T17:00:00+00:00',
     shiftEndsAt: '2026-10-03T23:00:00+00:00',
     shiftStatus: 'absent',
-    conversationId: 'conv_1',
+    conversationId: 'conv_twilio_+34600000001',
   },
   {
     id: 'emp_2',
@@ -52,7 +52,7 @@ const EMPLOYEES: SimulatorEmployee[] = [
     shiftStartsAt: null,
     shiftEndsAt: null,
     shiftStatus: null,
-    conversationId: null,
+    conversationId: 'conv_twilio_+34600000002',
   },
   {
     id: 'emp_3',
@@ -61,7 +61,7 @@ const EMPLOYEES: SimulatorEmployee[] = [
     shiftStartsAt: '2026-10-03T14:00:00+00:00',
     shiftEndsAt: '2026-10-03T18:00:00+00:00',
     shiftStatus: 'scheduled',
-    conversationId: 'conv_3',
+    conversationId: 'conv_twilio_+34600000003',
   },
 ]
 
@@ -77,9 +77,13 @@ function renderScreen() {
 beforeEach(() => {
   vi.mocked(isMockMode).mockReturnValue(false)
   vi.mocked(fetchSimulatorEmployees).mockResolvedValue(EMPLOYEES)
-  vi.mocked(fetchConversationThread).mockResolvedValue([
-    { from: 'assistant', text: 'Hola Ana, contame que paso' },
-  ])
+  // The roster always advertises the deterministic thread id
+  // (conv_twilio_<phone>); only Ana's thread has messages yet.
+  vi.mocked(fetchConversationThread).mockImplementation(async (conversationId: string) =>
+    conversationId === 'conv_twilio_+34600000001'
+      ? [{ from: 'assistant', text: 'Hola Ana, contame que paso' }]
+      : [],
+  )
   vi.mocked(sendSimulatorMessage).mockResolvedValue('sim_test_1')
   vi.mocked(fetchDemoClock).mockResolvedValue({
     now: '2026-10-03T15:11:00+00:00',
@@ -171,7 +175,18 @@ describe('SimulatorScreen (spec §7.6, real data)', () => {
     expect(screen.getByText('Bruno Bar')).toBeInTheDocument()
     // The thread of the first employee's real conversation.
     expect(await screen.findByText('Hola Ana, contame que paso')).toBeInTheDocument()
-    expect(fetchConversationThread).toHaveBeenCalledWith('conv_1')
+    expect(fetchConversationThread).toHaveBeenCalledWith('conv_twilio_+34600000001')
+  })
+
+  it('shows an honest empty thread for an employee who has not written yet', async () => {
+    renderScreen()
+
+    expect(await screen.findByText('Bruno Bar')).toBeInTheDocument()
+    const frame = screen
+      .getAllByTestId('employee-frame')
+      .find((candidate) => within(candidate).queryByText('Bruno Bar') !== null)!
+    expect(within(frame).getByText('No messages yet — write the first one.')).toBeInTheDocument()
+    expect(fetchConversationThread).toHaveBeenCalledWith('conv_twilio_+34600000002')
   })
 
   it('shows the shared demo clock time', async () => {

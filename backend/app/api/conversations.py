@@ -30,6 +30,31 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 ACTIVE_RESCUE_STATUSES = ("OPEN", "OFFERING", "AWAITING_APPROVAL", "ESCALATED")
 
+# Deterministic thread scheme: the orchestrator opens every inbound thread as
+# `conv_twilio_<phone>` (app.services.orchestrator.handle_inbound), so the id
+# is known before the first message exists and the roster can always
+# advertise it.
+CONVERSATION_ID_PREFIX = "conv_twilio_"
+
+
+def conversation_thread_id(phone_e164: str) -> str:
+    """Deterministic thread id for an employee's WhatsApp conversation."""
+    return f"{CONVERSATION_ID_PREFIX}{phone_e164}"
+
+
+async def _is_known_thread(conversation_id: str, session: AsyncSession) -> bool:
+    """True when the id is a deterministic thread of a real employee.
+
+    Such a thread exists conceptually from the first moment — it simply has
+    no messages yet, which is a normal empty state, not a 404."""
+    phone = conversation_id.removeprefix(CONVERSATION_ID_PREFIX)
+    if phone == conversation_id:  # not the deterministic scheme
+        return False
+    employee = (
+        await session.execute(select(Employee).where(Employee.phone_e164 == phone))
+    ).scalar_one_or_none()
+    return employee is not None
+
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
@@ -191,7 +216,14 @@ async def list_messages(
         )
     ).scalar_one_or_none()
     if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        # A thread exists conceptually from the first moment: the roster
+        # always advertises the deterministic id, so a brand-new employee's
+        # thread has a well-formed id and no rows yet. An empty answer is the
+        # honest contract; a 404 would make the UI show a failure for a
+        # normal state. Unknown ids still 404.
+        if not await _is_known_thread(conversation_id, session):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return []
     messages = (
         (
             await session.execute(

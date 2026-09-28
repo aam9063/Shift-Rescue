@@ -2,9 +2,10 @@
 
 `GET /api/employees` is the list the Simulator screen needs: each employee
 with their roles, today's shift window and status, and the id of their
-conversation when one exists (so the screen can open the real thread). This
-extends the spec's endpoint table for the demo screen and is documented as
-such in `docs/runbook.md`.
+conversation thread — always the deterministic `conv_twilio_<phone>` id the
+orchestrator uses, so the thread exists conceptually from the first moment
+even when no message has been written yet. This extends the spec's endpoint
+table for the demo screen and is documented as such in `docs/runbook.md`.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -14,8 +15,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.conversations import conversation_thread_id
 from app.api.dependencies import ManagerPrincipal, current_manager, get_db
-from app.db.models import Conversation, Employee, Shift
+from app.db.models import Employee, Shift
 from app.schemas.dashboard import iso_utc
 
 router = APIRouter(prefix="/api/employees", tags=["employees"])
@@ -75,24 +77,6 @@ async def list_employees(
         if shift.employee_id is not None:
             shift_by_employee.setdefault(shift.employee_id, shift)
 
-    # Latest conversation per employee (the screen opens its real thread).
-    conversations = (
-        (
-            await session.execute(
-                select(Conversation)
-                .where(Conversation.employee_id.in_(employee_ids))
-                .order_by(Conversation.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    conversation_by_employee: dict[str, str] = {
-        conversation.employee_id: conversation.id  # last write wins = latest
-        for conversation in conversations
-        if conversation.employee_id
-    }
-
     return [
         EmployeeOut(
             id=employee.id,
@@ -101,7 +85,15 @@ async def list_employees(
             shiftStartsAt=iso_utc(shift.starts_at) if shift else None,
             shiftEndsAt=iso_utc(shift.ends_at) if shift else None,
             shiftStatus=shift.status if shift else None,
-            conversationId=conversation_by_employee.get(employee.id),
+            # Always the deterministic thread id: the conversation exists
+            # conceptually from the first moment, it simply has no messages
+            # yet. `phone_e164` is NOT NULL, so the null branch is defensive
+            # documentation of the intent, not a live path.
+            conversationId=(
+                conversation_thread_id(employee.phone_e164)
+                if employee.phone_e164 is not None
+                else None
+            ),
         )
         for employee, shift in (
             (employee, shift_by_employee.get(employee.id)) for employee in employees

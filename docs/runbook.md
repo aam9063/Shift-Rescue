@@ -209,7 +209,10 @@ WhatsApp phone:
 
 1. Log in as the demo manager and open **Simulator**. The phone frames show
    the real employees (`GET /api/employees?location_id=`) with their real
-   conversation threads.
+   conversation threads. Every thread id is deterministic
+   (`conv_twilio_<phone>`), so the roster always advertises it: an employee
+   who has not written yet shows an empty thread (the messages endpoint
+   answers `[]`, never a 404) and can be written to immediately.
 2. Type as any employee and send: the API enqueues the *same* Celery task the
    Twilio webhook enqueues (`POST /dev/simulator/<employee_id>/messages`), so
    interpretation, threading, auditing and delivery behave exactly as with a

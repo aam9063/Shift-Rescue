@@ -23,12 +23,16 @@ async def test_employees_list_includes_shift_and_conversation(client) -> None:
     assert ana["shiftStatus"] == "absent"
     assert ana["shiftStartsAt"].endswith("+00:00")
     assert ana["shiftEndsAt"] is not None
-    assert ana["conversationId"] == "conv_1"
+    # Deliberate contract change: the roster always advertises the
+    # deterministic thread id (conv_twilio_<phone>), whether or not a
+    # conversation row exists yet — the thread exists conceptually from the
+    # first moment, so the Simulator can open any employee's thread.
+    assert ana["conversationId"] == "conv_twilio_+34600000001"
 
-    assert bruno["conversationId"] == "conv_2"
+    assert bruno["conversationId"] == "conv_twilio_+34600000002"
     assert bruno["shiftStatus"] is None  # not scheduled today in the world
 
-    assert carla["conversationId"] is None
+    assert carla["conversationId"] == "conv_twilio_+34600000003"
     assert carla["shiftStatus"] is None
 
 

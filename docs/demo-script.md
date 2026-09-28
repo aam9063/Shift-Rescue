@@ -42,7 +42,9 @@ with). All data is demo data at "La Terraza del Puerto".
 4. Open **Simulator**. Each frame is labelled with the employee's situation
    against the current time — *On shift now*, *Starts at HH:MM*, *Ended at
    HH:MM*, *No shift today*. Only an *On shift now* employee can report an
-   absence; the agent correctly answers "out of scope" to anyone else.
+   absence; the agent correctly answers "out of scope" to anyone else. Every
+   frame opens its real thread — an employee who has not written yet shows an
+   empty thread instead of an error, and you can write the first message.
 
 ## 3. Produce a rescue from the Simulator (about a minute)
 

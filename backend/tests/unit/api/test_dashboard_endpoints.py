@@ -318,6 +318,26 @@ async def test_conversation_messages_404(client) -> None:
     assert response.status_code == 404
 
 
+async def test_conversation_thread_without_messages_is_empty_not_404(client) -> None:
+    """A deterministic thread of a real employee exists conceptually from the
+    first moment: no messages yet is a normal empty state, not an error."""
+    response = await client.get(
+        "/api/conversations/conv_twilio_+34600000001/messages", headers=auth_headers()
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_conversation_thread_of_an_unknown_phone_is_404(client) -> None:
+    """Only a real employee's deterministic thread is a known empty state."""
+    response = await client.get(
+        "/api/conversations/conv_twilio_+34999999999/messages", headers=auth_headers()
+    )
+
+    assert response.status_code == 404
+
+
 async def test_interpretations_require_operator(client) -> None:
     forbidden = await client.get("/api/interpretations", headers=auth_headers())
     assert forbidden.status_code == 403
