@@ -202,3 +202,23 @@ def test_worker_shutdown_handler_swallows_flush_failures(monkeypatch) -> None:
     failures = [e for e in logs if e["event"] == "worker_tracing_shutdown_failed"]
     assert len(failures) == 1
     assert "flush exploded" in failures[0]["error"]
+
+
+# --- Sentry init (best effort, spec §9.3 spirit) ------------------------------
+
+
+def test_sentry_disabled_is_a_silent_no_op(monkeypatch) -> None:
+    """Unset SENTRY_DSN (the default): neither boot path touches sentry_sdk."""
+    import sentry_sdk
+
+    import app.main as main
+
+    calls: list[dict] = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: calls.append(kwargs))
+    settings = make_settings()
+    assert settings.sentry_dsn == ""
+
+    main._init_sentry(settings)
+    bootstrap._init_sentry(settings)
+
+    assert calls == []

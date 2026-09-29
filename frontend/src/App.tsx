@@ -11,7 +11,9 @@ import { AgentDecisionsScreen } from './screens/AgentDecisionsScreen'
 import { EvalsScreen } from './screens/EvalsScreen'
 import { SimulatorScreen } from './screens/SimulatorScreen'
 import { RequireAuth } from './components/RequireAuth'
+import { ReportAbsenceDialog } from './components/ReportAbsenceDialog'
 import { getSession } from './services/auth'
+import { useLiveEvents } from './services/liveEvents'
 import { ApiError } from './services/apiClient'
 import { usePendingApprovals } from './services/hooks'
 
@@ -58,8 +60,12 @@ function viewFromHash(): AppView | null {
 function Shell({ now, onLogout }: { now?: Date; onLogout: () => void }) {
   const [view, setView] = useState<AppView>(() => viewFromHash() ?? 'today')
   const [selectedRescueId, setSelectedRescueId] = useState<string | null>(null)
+  const [reportingAbsence, setReportingAbsence] = useState(false)
   const { approvals } = usePendingApprovals()
   const manager = getSession()?.manager
+  // Live channel (spec §7.5): the screens refetch when the worker reports a
+  // change made elsewhere. Its state is shown so it is never a silent promise.
+  const liveState = useLiveEvents()
 
   const navigate = (next: AppView) => {
     setView(next)
@@ -78,6 +84,15 @@ function Shell({ now, onLogout }: { now?: Date; onLogout: () => void }) {
         onLogout={onLogout}
       />
       <main className="mx-auto w-full max-w-[1440px] px-4 py-8 md:px-6">
+        {liveState !== 'live' ? (
+          <p
+            role="status"
+            className="mb-4 inline-flex items-center gap-2 rounded-pill bg-black/5 px-3 py-1 text-xs font-medium tracking-wide text-text-secondary"
+          >
+            <span className="size-1.5 rounded-full bg-text-secondary" aria-hidden />
+            {liveState === 'connecting' ? 'Connecting to live updates…' : 'Live updates offline'}
+          </p>
+        ) : null}
         {selectedRescueId ? (
           <RescueDetailScreen
             rescueId={selectedRescueId}
@@ -104,7 +119,15 @@ function Shell({ now, onLogout }: { now?: Date; onLogout: () => void }) {
           <TodayScreen now={now} onOpenRescue={setSelectedRescueId} />
         )}
       </main>
-      <Fab label="Report absence" />
+      {/* The manager marks an absence here (spec §7.5): the rescue opens and
+          the first wave goes out without an employee confirmation. */}
+      <Fab label="Report absence" onClick={() => setReportingAbsence(true)} />
+      {reportingAbsence ? (
+        <ReportAbsenceDialog
+          dayIso={(now ?? new Date()).toISOString().slice(0, 10)}
+          onClose={() => setReportingAbsence(false)}
+        />
+      ) : null}
     </div>
   )
 }

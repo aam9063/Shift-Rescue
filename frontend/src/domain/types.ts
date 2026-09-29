@@ -68,6 +68,10 @@ export type AuditEventType =
   | 'SHIFT_ASSIGNED'
   | 'ESCALATED'
   | 'CANCELLED'
+  /** A notice went (or could not go) to the manager's phone; recorded on the
+   * case so the timeline shows that somebody was told. */
+  | 'MANAGER_NOTIFIED'
+  | 'MANAGER_NOTIFY_SKIPPED'
 
 export interface AuditEvent {
   id: string

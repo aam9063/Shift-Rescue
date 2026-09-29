@@ -20,6 +20,14 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // Live dashboard channel (spec §7.5): a WebSocket needs the upgrade
+      // forwarded too, or the handshake never completes and the dashboard shows
+      // "connecting" forever.
+      '/ws': {
+        target: 'ws://localhost:8000',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
   test: {

@@ -18,6 +18,7 @@ from app.channels.twilio_whatsapp import TwilioWhatsAppChannel
 from app.core.clock import Clock, DemoClock, SystemClock, redis_offset_source
 from app.core.config import Settings, get_settings
 from app.db.session import create_engine_and_session
+from app.events import RedisEventBus
 from app.integrations.workforce.mock import MockWorkforceAdapter
 from app.services.orchestrator import RescueOrchestrator
 from app.workers.celery_scheduler import CeleryScheduler
@@ -128,6 +129,11 @@ def build_runtime(settings: Settings, *, scheduler: Scheduler | None = None) -> 
         scheduler=scheduler,
         clock=clock,
         interpreter=interpreter,
+        # The live dashboard channel (spec §7.5): the worker publishes every
+        # transition and the API relays it to the connected managers. Best
+        # effort by design — a broker outage degrades to the previous pull-only
+        # behaviour instead of failing a rescue.
+        events=RedisEventBus(settings.redis_url),
     )
     for name, handler in orchestrator.task_handlers().items():
         scheduler.register(name, handler)
