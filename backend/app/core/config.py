@@ -66,7 +66,9 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
-    sentry_dsn: str = ""  # declared for .env parity; Sentry init not wired yet
+    # Sentry (spec §9.3): initialized in the API lifespan and the worker
+    # bootstrap when set; unset stays a silent no-op.
+    sentry_dsn: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

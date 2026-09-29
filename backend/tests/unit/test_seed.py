@@ -159,3 +159,40 @@ async def test_seed_clears_previous_shifts_before_reinserting(session_factory) -
         await seed_database(session)
         shifts = (await session.execute(select(Shift))).scalars().all()
         assert all(s.id != "stale_1" for s in shifts)
+
+
+def test_a_dry_day_gets_the_demo_anchors_it_needs() -> None:
+    """At any hour a seeded demo must have somebody who can act now.
+
+    The rotation has fixed windows, so outside working hours the day can be dry:
+    at 03:00 nothing is in progress, and at 23:30 nothing starts later. Whatever
+    the hour, the seed guarantees both a shift in progress and something ahead,
+    using employees that actually exist.
+    """
+    from app.db.seed import SEED_START_DATE, _shifts
+
+    for hour, minute in ((3, 0), (23, 30)):
+        moment = SEED_START_DATE.replace(hour=hour, minute=minute, tzinfo=UTC)
+        shifts = _shifts(now=moment)
+        pool = {shift.employee_id for shift in shifts}
+
+        assert any(
+            shift.starts_at <= moment <= shift.ends_at for shift in shifts
+        ), f"nobody on shift at {hour:02d}:{minute:02d}"
+        assert any(
+            shift.starts_at > moment for shift in shifts
+        ), f"nothing ahead at {hour:02d}:{minute:02d}"
+        anchors = [shift for shift in shifts if "anchor" in shift.id]
+        assert all(len(shift.id) <= 64 for shift in anchors)
+        # An anchor must never schedule somebody who is not on the roster.
+        assert all(shift.employee_id in pool for shift in anchors)
+
+
+def test_a_normal_working_hour_needs_no_anchors() -> None:
+    """During the day the rotation already covers past, present and future."""
+    from app.db.seed import SEED_START_DATE, _shifts
+
+    midday = SEED_START_DATE.replace(hour=10, tzinfo=UTC)
+    shifts = _shifts(now=midday)
+
+    assert not [s for s in shifts if "anchor" in s.id]

@@ -81,6 +81,14 @@ interface MetricsWire {
   stuckRescues: number
 }
 
+/** Manager marks a shift absent: the rescue opens and the first wave goes out. */
+export async function markShiftAbsence(shiftId: string): Promise<MutationAcceptedWire> {
+  return apiFetch<MutationAcceptedWire>(
+    `/api/shifts/${encodeURIComponent(shiftId)}/absence`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 interface MutationAcceptedWire {
   status: string
   id: string

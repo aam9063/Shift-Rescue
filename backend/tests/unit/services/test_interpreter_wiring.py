@@ -630,3 +630,58 @@ async def test_llm_context_contract_exact_key_set() -> None:
         "pending_confirmation",
     }
     assert llm.contexts[-1]["pending_confirmation"] == "shift_1"
+
+
+# --- trace link (spec §7.6): the Langfuse URL input ----------------------------
+
+
+async def test_llm_interpretation_stores_the_trace_id_when_a_span_is_active() -> None:
+    """A valid OTel span at persist time lands in `extracted["trace_id"]`
+    (hex), which the API already turns into a Langfuse link."""
+    import opentelemetry.trace as otel_trace
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+    world, _ = await build_world(floor_count=4)
+    world.orchestrator.interpreter = interpreter_with(
+        {"intent": "ABSENCE_REPORT", "confidence": 0.95}
+    )
+    trace_id = 0x1234567890ABCDEF1234567890ABCDEF
+    span = NonRecordingSpan(
+        SpanContext(
+            trace_id=trace_id,
+            span_id=0x2222,
+            is_remote=False,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+    )
+    with otel_trace.use_span(span):
+        await world.orchestrator.handle_inbound(
+            conversation_id=CONVERSATION,
+            employee_id="emp_01_floor",
+            provider_message_id="wires_trace_1",
+            text="me encuentro fatal, hoy no puedo ir",
+        )
+
+    async with world.session_factory() as session:
+        row = (await session.execute(select(InterpretationRow))).scalars().one()
+    assert row.extracted["trace_id"] == format(trace_id, "032x")
+
+
+async def test_llm_interpretation_stores_no_trace_id_without_an_active_span() -> None:
+    """Tracing off (no valid span): the key is not stored at all, so the API
+    trace link stays null exactly as before."""
+    world, _ = await build_world(floor_count=4)
+    world.orchestrator.interpreter = interpreter_with(
+        {"intent": "ABSENCE_REPORT", "confidence": 0.95}
+    )
+
+    await world.orchestrator.handle_inbound(
+        conversation_id=CONVERSATION,
+        employee_id="emp_01_floor",
+        provider_message_id="wires_trace_2",
+        text="me encuentro fatal, hoy no puedo ir",
+    )
+
+    async with world.session_factory() as session:
+        row = (await session.execute(select(InterpretationRow))).scalars().one()
+    assert "trace_id" not in row.extracted

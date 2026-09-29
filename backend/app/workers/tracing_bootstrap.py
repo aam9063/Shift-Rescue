@@ -20,17 +20,40 @@ from typing import Any
 from celery.signals import worker_process_init, worker_process_shutdown
 from structlog import get_logger
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.observability.tracing import configure_tracing, shutdown_tracing
 
 logger = get_logger(__name__)
+
+
+def _init_sentry(settings: Settings) -> None:
+    """Best-effort Sentry init in the worker: never stops a boot.
+
+    Unset DSN is a silent no-op; a failure is logged and swallowed. The DSN
+    itself is never logged. Twin copy lives in `app/main.py` (API process).
+    """
+    if not settings.sentry_dsn:
+        return
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.app_env,
+            traces_sample_rate=0.1,
+        )
+        logger.info("sentry_initialized")
+    except Exception as error:
+        logger.warning("sentry_init_failed", error=str(error)[:200])
 
 
 @worker_process_init.connect
 def _init_worker_tracing(**_kwargs: Any) -> None:
     """Install the TracerProvider in this preforked child (or solo worker)."""
     try:
-        installed = configure_tracing(get_settings())
+        settings = get_settings()
+        installed = configure_tracing(settings)
+        _init_sentry(settings)
         logger.info("worker_tracing_bootstrap", installed=installed)
     except Exception as error:
         logger.warning("worker_tracing_bootstrap_failed", error=str(error)[:200])

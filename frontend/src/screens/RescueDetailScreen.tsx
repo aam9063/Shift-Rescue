@@ -35,6 +35,7 @@ const eventDotClasses: Partial<Record<AuditEvent['type'], string>> = {
   OFFER_ACCEPTED: 'bg-green-accent',
   OFFER_DECLINED: 'bg-error',
   ESCALATED: 'bg-error',
+  MANAGER_NOTIFY_SKIPPED: 'bg-error',
 }
 
 function offerStatusFor(candidate: CandidateResult, offers: Offer[]): OfferStatus | undefined {
