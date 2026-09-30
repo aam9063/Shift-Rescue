@@ -73,7 +73,9 @@ answer — full shift, partial coverage, or no.
   traced and reviewed, not vibes.
 
 > Currently in development as a portfolio-grade MVP. See
-> `docs/SHIFT_RESCUE_SPEC.md` for the full specification.
+> `docs/SHIFT_RESCUE_SPEC.md` for the full specification and
+> [docs/system-design.md](docs/system-design.md) for the complete system
+> design.
 
 ## Quick start
 
@@ -153,6 +155,8 @@ Demo credentials (created by `make seed`): `manager@laterraza.demo`
 
 ## Documentation
 
+- [System design](docs/system-design.md) — the complete walkthrough: problem,
+  domain, rules, agent, architecture, evaluation, operations, deployment
 - [Product & engineering specification](docs/SHIFT_RESCUE_SPEC.md)
 - [ADR-001: foundation stack](docs/adr/ADR-001-foundation-stack.md)
 - [ADR-002: Strands without the autonomous loop](docs/adr/ADR-002-strands-without-autonomous-loop.md)
