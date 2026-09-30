@@ -1,5 +1,7 @@
 # Shift Rescue
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/aam9063/Shift-Rescue)
+
 **An AI agent that covers last-minute shift absences — so the manager doesn't have to.**
 
 Shift Rescue automatically covers same-day absences for shift-based businesses
