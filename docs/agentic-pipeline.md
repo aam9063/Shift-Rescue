@@ -1,11 +1,5 @@
 # Agentic development pipeline
 
-> How this repository is built: the agents, the workflow, where each piece is
-> configured, and what differs from the defaults. The interview-shaped summary
-> is at the top; the evidence and the configuration live underneath it.
-
-## The answer, in under 200 words
-
 I drive [Pi](https://github.com/badlogic/pi-mono) (a coding-agent CLI) through a
 custom harness, Gentle AI. Every task starts read-only: I explore, and if the
 work is substantial the harness writes a feature document in `odd/tasks/`,
