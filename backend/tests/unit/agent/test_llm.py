@@ -88,8 +88,13 @@ async def test_open_circuit_fails_fast_without_calling_the_agent() -> None:
     agent = FakeAgent(structured_output=structured())
     breaker = CircuitBreaker(failure_threshold=1, reset_after=timedelta(seconds=60))
     client = StrandsLLMClient(agent_factory=lambda: agent, breaker=breaker)
-    now = datetime(2026, 10, 3, 14, 40, tzinfo=UTC)
-    breaker.record_failure(now)
+    # Open the breaker against the same clock the client reads. A fixed
+    # timestamp here is a time bomb: `is_open()` is called with no argument and
+    # falls back to `datetime.now(UTC)`, so once the real clock passes
+    # `reset_after` the breaker auto-resets, the client calls the agent and the
+    # expected error never arrives. The window semantics themselves are pinned
+    # with explicit timestamps in the tests above.
+    breaker.record_failure()
 
     with pytest.raises(CircuitOpenError):
         await client.interpret("sí voy", {})
