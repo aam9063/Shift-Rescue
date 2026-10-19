@@ -1,3 +1,10 @@
+<a href="https://nan.builders/?ref=built-with-nan">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://nan.builders/badge/built-with-nan-light.svg">
+    <img width="266" src="https://nan.builders/badge/built-with-nan-dark.svg" alt="Built with NaN">
+  </picture>
+</a>
+
 # Shift Rescue
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/aam9063/Shift-Rescue)
@@ -171,3 +178,6 @@ Demo credentials (created by `make seed`): `manager@laterraza.demo`
 ## License
 
 TBD before public release.
+
+[![Built with NaN](https://nan.builders/badge/built-with-nan-compact.svg)](https://nan.builders/?ref=built-with-nan)
+

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Shift Rescue: Absence Rescue Flow",
+    "locale": "en",
+    "output": ".archify/architecture-shift-rescue-20261007-120000/shift-rescue.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/aam9063/Shift-Rescue.git",
+      "provider": "github",
+      "revision": "d1d76c60afa717835462a3d7479d5db651864507"
+    }
+  },
+  "components": [
+    {
+      "id": "twilio", "type": "external", "label": "Twilio WhatsApp", "sublabel": "employees' channel",
+      "pos": [40, 300], "size": [130, 60],
+      "sources": [
+        { "path": "backend/app/api/webhooks_twilio.py", "line": 94 },
+        { "path": "backend/app/channels/twilio_whatsapp.py", "line": 76 }
+      ]
+    },
+    {
+      "id": "api", "type": "backend", "label": "FastAPI API", "sublabel": "webhooks, REST, WS",
+      "pos": [320, 300], "size": [130, 60],
+      "sources": [
+        { "path": "backend/app/main.py", "line": 75 },
+        { "path": "backend/app/api/webhooks_twilio.py", "line": 94 }
+      ]
+    },
+    {
+      "id": "redis", "type": "messagebus", "label": "Redis", "sublabel": "Celery broker",
+      "pos": [600, 300], "size": [130, 60],
+      "sources": [
+        { "path": "backend/app/workers/celery_app.py", "line": 18, "end_line": 22 }
+      ]
+    },
+    {
+      "id": "worker", "type": "backend", "label": "Celery Worker", "sublabel": "RescueOrchestrator",
+      "pos": [880, 300], "size": [130, 60],
+      "sources": [
+        { "path": "backend/app/workers/tasks.py", "line": 40, "end_line": 61 },
+        { "path": "backend/app/services/orchestrator.py", "line": 164 }
+      ]
+    },
+    {
+      "id": "llm", "type": "external", "label": "LLM Provider", "sublabel": "via Strands agent",
+      "pos": [1160, 300], "size": [130, 60],
+      "sources": [
+        { "path": "backend/app/agent/llm.py", "line": 95 },
+        { "path": "backend/app/agent/factory.py", "line": 98, "end_line": 132 }
+      ]
+    },
+    {
+      "id": "postgres", "type": "database", "label": "PostgreSQL", "sublabel": "SQLAlchemy async",
+      "pos": [880, 460], "size": [130, 60],
+      "sources": [
+        { "path": "backend/app/db/session.py", "line": 19, "end_line": 20 }
+      ]
+    },
+    {
+      "id": "spa", "type": "frontend", "label": "Manager SPA", "sublabel": "React + Vite",
+      "pos": [320, 460], "size": [130, 60],
+      "sources": [
+        { "path": "frontend/src/main.tsx", "line": 4, "end_line": 8 },
+        { "path": "frontend/src/services/apiClient.ts", "line": 73 }
+      ]
+    }
+  ],
+  "connections": [
+    { "id": "twilio-to-api", "from": "twilio", "to": "api", "label": "HTTPS webhook", "variant": "emphasis" },
+    { "id": "api-to-redis", "from": "api", "to": "redis", "label": "enqueue .delay", "variant": "dashed" },
+    { "id": "redis-to-worker", "from": "redis", "to": "worker", "label": "Celery task" },
+    { "id": "worker-to-llm", "from": "worker", "to": "llm", "label": "interpret" },
+    { "id": "worker-to-db", "from": "worker", "to": "postgres", "label": "persist", "fromSide": "bottom", "toSide": "top" },
+    { "id": "worker-to-twilio", "from": "worker", "to": "twilio", "label": "wave offers", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[945, 200], [105, 200]] },
+    { "id": "spa-to-api", "from": "spa", "to": "api", "label": "REST + JWT", "variant": "security", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Inbound", "items": ["Twilio webhook is signature-validated", "Route acknowledges, work runs in Celery"] },
+    { "dot": "emerald", "title": "Dashboard", "items": ["Manager SPA calls the API with a Bearer JWT", "Manager actions are also enqueued as tasks"] },
+    { "dot": "amber", "title": "Scope", "items": ["Overview of the absence-rescue flow", "Timers, events and HRIS are not drawn"] }
+  ]
+}

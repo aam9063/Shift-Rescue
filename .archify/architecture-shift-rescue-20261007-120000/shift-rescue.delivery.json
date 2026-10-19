@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "8029085d-9b46-4f0c-afef-441dd1d692af",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\alber\\orca\\Shift-Rescue\\.archify\\architecture-shift-rescue-20261007-120000\\candidate.json",
+  "output": "C:\\Users\\alber\\orca\\Shift-Rescue\\.archify\\architecture-shift-rescue-20261007-120000\\shift-rescue.html",
+  "specification": {
+    "sha256": "458e3909fb2d143f80795a31344e525020e90a2a498a8a731c3e71dc203199ea",
+    "bytes": 3895
+  },
+  "artifact": {
+    "sha256": "2c69b2509c2a053b7dea95a59d74c28e74c7daf33bf150ffc92c1d58d667ab4d",
+    "bytes": 759258
+  }
+}
