@@ -626,6 +626,28 @@ El proyecto también iteró sobre documentos:
 
 ### 5.1 La arquitectura, en una imagen
 
+El camino en tiempo de ejecución de una ausencia, de punta a punta:
+
+![Flujo de rescate de una ausencia: WhatsApp entra como webhook a FastAPI, que persiste y encola en Redis; el worker de Celery orquesta el rescate, consulta al proveedor de LLM para interpretar el mensaje, persiste cada transición en PostgreSQL y vuelve a salir por WhatsApp con las ofertas de la oleada. El SPA del manager opera por REST + JWT](frontend/public/img/shift-rescue-absence-rescue-flow.png)
+
+Lo que el diagrama deja ver de un vistazo, y que son decisiones de diseño, no
+detalles de implementación:
+
+- El **webhook solo persiste y encola**: la llamada no espera al LLM (la regla de
+  responder en menos de 200 ms que destapó el feature `webhook-offload`).
+- La **orquestación corre en el worker de Celery**, no en el proceso de la API.
+- El **LLM se consulta desde el worker**, y solo como borde de interpretación:
+  no tiene herramientas que muten estado (ADR-002).
+- **Cada transición se persiste** en PostgreSQL antes de continuar.
+- El **bucle punteado** de la izquierda es la respuesta: el worker vuelve a salir
+  por WhatsApp para ofrecer el turno a los candidatos.
+
+El mapa completo del sistema incluye tres cosas que este diagrama de flujo
+deliberadamente no dibuja, para no perder legibilidad: el **adaptador del HRIS**
+(la frontera con el sistema que el cliente ya usa), el **motor de elegibilidad y
+ranking** como código puro, y la **exportación de trazas** a Langfuse. Ese mapa
+completo es este:
+
 ```
 WhatsApp (Twilio) ──webhook──> FastAPI ──enqueue──> Celery workers ──> Rescue Orchestrator
                                   │                        │               │

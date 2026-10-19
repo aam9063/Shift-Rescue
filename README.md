@@ -68,6 +68,21 @@ answer — full shift, partial coverage, or no.
 
 ![WhatsApp-style chat with a cover offer](frontend/public/img/shift-rescue/offer-chat.png)
 
+## Architecture at a glance
+
+The runtime path of a single absence. WhatsApp reaches the API as a webhook; the
+API persists the message and enqueues the work; the rescue itself runs in a
+Celery worker, never inside the webhook. The worker reaches the LLM provider at
+the interpretation edge — language in, structured meaning out — persists every
+state change in PostgreSQL, and sends the wave offers back out through WhatsApp.
+The manager's SPA reads and acts over REST + JWT.
+
+![Absence rescue flow: WhatsApp to FastAPI to Redis to a Celery worker, with the LLM provider as an interpretation edge, state persisted in PostgreSQL, and the manager SPA on REST + JWT](frontend/public/img/shift-rescue-absence-rescue-flow.png)
+
+This diagram shows the runtime path only, to keep it readable. The deterministic
+core (eligibility, ranking, state machine), the HRIS adapter and the trace
+export are in the [system design](docs/system-design.md).
+
 ## Design principles
 
 - **Deterministic core, LLM at the edges.** Business rules (eligibility,
